@@ -59,6 +59,24 @@ macro_rules! bold {
     };
 }
 
+#[macro_export]
+macro_rules! italic {
+    ($fmt:expr) => {
+        if $crate::should_use_ansi() {
+            format!("\x1b[3m{}\x1b[0m", $fmt)
+        } else {
+            format!("{}", $fmt)
+        }
+    };
+    ($fmt:expr, $($arg:tt)*) => {
+        if $crate::should_use_ansi() {
+            format!("\x1b[3m{}\x1b[0m", format!($fmt, $($arg)*))
+        } else {
+            format!($fmt, $($arg)*)
+        }
+    };
+}
+
 pub enum Color {
     Red,
     Green,
