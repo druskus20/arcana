@@ -189,7 +189,7 @@ async fn glados_loop(
                         JoinHandle::OSThread(handle) => handle.thread().unpark(), // ????
                     }
                 }
-                return Ok(());
+                break;
             }
             None => {
                 error!("Channel closed");

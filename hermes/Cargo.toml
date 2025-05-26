@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+spells = { version = "0.1.0", path = "../spells" }
 thiserror = "2.0"
 uuid = { version = "1.17", features = ["v4"] }
 tokio = { version = "1.44", features = [
