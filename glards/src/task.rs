@@ -3,7 +3,7 @@ use std::{fmt::Display, sync::Arc};
 use thiserror::Error;
 use tracing::{error, info};
 
-use crate::{GladosHandle, sync_to_async};
+use crate::{GladosHandle, ToGladosMsg, sync_to_async};
 
 #[derive(Debug, Error)]
 pub enum TaskError {
@@ -11,6 +11,8 @@ pub enum TaskError {
     TaskFailed,
     #[error("Failed to receive oneshot message")]
     OneShotRecvError(#[from] tokio::sync::oneshot::error::RecvError),
+    #[error("Error sending message")]
+    TrySendError(#[from] tokio::sync::mpsc::error::TrySendError<ToGladosMsg>),
 }
 
 #[derive(Debug, Error)]
@@ -124,11 +126,12 @@ trait TaskCtx {
     }
 }
 
-pub struct AsyncTaskCtx {
+pub struct AsyncTaskCtx<E> {
     pub glados_handle: GladosHandle,
+    pub extra_ctx: E,
 }
 
-impl TaskCtx for AsyncTaskCtx {
+impl<E> TaskCtx for AsyncTaskCtx<E> {
     fn glados(&self) -> &GladosHandle {
         &self.glados_handle
     }

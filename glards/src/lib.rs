@@ -27,11 +27,23 @@ pub struct GladosHandle {
     to_glados: Sender<ToGladosMsg>,
 }
 
+#[derive(Debug, Error)]
+pub enum SpawnTaskError {
+    #[error("Error sending message to Glados")]
+    TrySendError(#[from] tokio::sync::mpsc::error::TrySendError<ToGladosMsg>),
+}
+
 impl GladosHandle {
-    pub fn spawn_async<F, Fut, Ctx>(&self, name: &str, f: F) -> TaskHandle
+    pub fn spawn_async<F, Fut, Ctx>(
+        &self,
+        name: &str,
+        extra_ctx: Ctx,
+        f: F,
+    ) -> Result<(), SpawnTaskError>
     where
-        F: 'static + Send + FnOnce(AsyncTaskCtx) -> Fut,
+        F: 'static + Send + FnOnce(AsyncTaskCtx<Ctx>) -> Fut,
         Fut: Send + std::future::Future<Output = Result<(), TaskError>>,
+        Ctx: 'static + Send,
     {
         debug!("Spawning async task: {}", name);
 
@@ -42,6 +54,7 @@ impl GladosHandle {
         let join_handle = tokio::task::spawn({
             let ctx = AsyncTaskCtx {
                 glados_handle: self.clone(),
+                extra_ctx,
             };
             let to_glados = self.to_glados.clone();
             async move {
@@ -54,23 +67,19 @@ impl GladosHandle {
                 };
 
                 let r = f(ctx).await;
-                to_glados
-                    .try_send(ToGladosMsg::RemoveTask(uuid))
-                    .expect("Failed to send task removal to Glados");
+                to_glados.try_send(ToGladosMsg::RemoveTask(uuid))?;
                 r
             }
         });
 
         let task_handle = TaskHandle::new(name, JoinHandle::Tokio(join_handle));
 
-        self.to_glados
-            .try_send(ToGladosMsg::AddTask {
-                task_handle,
-                responder: notify_ready_to_start,
-            })
-            .expect("Failed to send task to Glados");
+        self.to_glados.try_send(ToGladosMsg::AddTask {
+            task_handle,
+            responder: notify_ready_to_start,
+        })?;
 
-        todo!()
+        Ok(())
     }
 }
 
