@@ -1,4 +1,5 @@
 use task::{AsyncTaskCtx, JoinHandle, TaskError, TaskHandle};
+use thiserror::Error;
 use tokio::sync::{
     mpsc::{Receiver, Sender},
     oneshot::Sender as OneShotSender,
@@ -9,12 +10,20 @@ use uuid::Uuid;
 mod sync_to_async;
 mod task;
 
-use thiserror::Error;
-
 #[derive(Error, Debug)]
 pub enum GladosError {
     #[error("Unknown error")]
     Unknown,
+    #[error("Task not found")]
+    TaskNotFound,
+    #[error("Task already exists")]
+    AlreadyExists,
+    #[error(transparent)]
+    SendError(#[from] tokio::sync::mpsc::error::SendError<ToGladosMsg>),
+    #[error("Failed to send a oneshot message: {0}")]
+    OneShotSendError(String),
+    #[error("Failed to join task")]
+    JoinError(#[from] task::JoinHandleError),
 }
 
 pub struct Glados {
@@ -91,15 +100,23 @@ impl Glados {
         }
     }
 
-    pub async fn start(self) -> Result<(tokio::task::JoinHandle<()>, GladosHandle), GladosError> {
+    pub async fn start(
+        self,
+    ) -> (
+        tokio::task::JoinHandle<Result<(), GladosError>>,
+        GladosHandle,
+    ) {
         let (to_glados, from_glados_handle) = tokio::sync::mpsc::channel(self.channel_capacity);
         let glados_task_handle =
             tokio::task::spawn(async move { glados_loop(self, from_glados_handle).await });
-        Ok((glados_task_handle, GladosHandle { to_glados }))
+        (glados_task_handle, GladosHandle { to_glados })
     }
 }
 
-async fn glados_loop(mut glados: Glados, mut from_handle: Receiver<ToGladosMsg>) {
+async fn glados_loop(
+    mut glados: Glados,
+    mut from_handle: Receiver<ToGladosMsg>,
+) -> Result<(), GladosError> {
     let mut graceful_shutdown = false;
     loop {
         if graceful_shutdown {
@@ -121,7 +138,8 @@ async fn glados_loop(mut glados: Glados, mut from_handle: Receiver<ToGladosMsg>)
                     warn!("Ignoring task addition during graceful shutdown");
                     responder
                         .send(Err(AddTaskError::ShutdownInProgress))
-                        .expect("Failed to notify task");
+                        .map_err(|value| GladosError::OneShotSendError(format!("{value:?}")))?;
+
                     continue;
                 }
                 // Normal behavior - add task
@@ -129,9 +147,9 @@ async fn glados_loop(mut glados: Glados, mut from_handle: Receiver<ToGladosMsg>)
 
                 let uuid = task_handle.id;
                 glados.active_tasks.push(task_handle);
-                responder
-                    .send(Ok(uuid))
-                    .expect("Failed to notify task to start");
+                responder.send(Ok(uuid)).map_err(|value| {
+                    GladosError::OneShotSendError(format!("Failed to send response: {value:?}"))
+                })?;
             }
             Some(ToGladosMsg::RemoveTask(task)) => {
                 info!("Removing task: {}", task);
@@ -140,17 +158,14 @@ async fn glados_loop(mut glados: Glados, mut from_handle: Receiver<ToGladosMsg>)
                     .active_tasks
                     .iter()
                     .position(|t| t.id == task)
-                    .expect("Task not found");
+                    .ok_or(GladosError::TaskNotFound)?;
 
                 // Remove the task, preserving ownership
                 let task = glados.active_tasks.swap_remove(task_position);
 
                 // we need to wait on the handle so we Actually get the error trace /
                 // result
-                task.join_handle
-                    .try_join()
-                    .await
-                    .expect("Failed to join task");
+                task.join_handle.try_join().await?;
             }
             Some(ToGladosMsg::GracefulShutdown) => {
                 info!("Graceful shutdown started");
@@ -179,6 +194,7 @@ async fn glados_loop(mut glados: Glados, mut from_handle: Receiver<ToGladosMsg>)
         }
     }
     info!("Glados finished");
+    Ok(())
 }
 
 #[derive(Error, Debug)]
