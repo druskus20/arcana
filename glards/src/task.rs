@@ -87,35 +87,17 @@ pub enum JoinHandle {
 }
 
 impl JoinHandle {
-    pub async fn try_join(self: JoinHandle) -> Result<(), JoinHandleError> {
+    pub async fn try_join(self: JoinHandle) -> Result<Result<(), TaskError>, JoinHandleError> {
         match self {
             JoinHandle::Tokio(join_handle) => {
-                let r = join_handle.await?;
-                match r {
-                    Ok(_) => {
-                        info!("Task finished successfully");
-                    }
-                    Err(e) => {
-                        error!("Glados: A task failed: {:?}", e);
-                    }
-                }
+                join_handle.await.map_err(JoinHandleError::TokioJoinError)
             }
             JoinHandle::OSThread(join_handle) => {
                 let tokio = tokio::runtime::Handle::current();
-                let r = sync_to_async::sync_to_async!(tokio, async { join_handle.join() })
-                    .map_err(|e| JoinHandleError::OSThreadJoinError(Box::new(e)))?;
-                match r {
-                    Ok(_) => {
-                        info!("Task finished successfully");
-                    }
-                    Err(e) => {
-                        error!("Glados: A (Thread) task failed: {:?}", e);
-                    }
-                }
+                sync_to_async::sync_to_async!(tokio, async { join_handle.join() })
+                    .map_err(|e| JoinHandleError::OSThreadJoinError(Box::new(e)))
             }
-        };
-
-        Ok(())
+        }
     }
 }
 

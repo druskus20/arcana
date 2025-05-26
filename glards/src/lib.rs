@@ -12,8 +12,6 @@ mod task;
 
 #[derive(Error, Debug)]
 pub enum GladosError {
-    #[error("Unknown error")]
-    Unknown,
     #[error("Task not found")]
     TaskNotFound,
     #[error("Task already exists")]
@@ -22,8 +20,10 @@ pub enum GladosError {
     SendError(#[from] tokio::sync::mpsc::error::SendError<ToGladosMsg>),
     #[error("Failed to send a oneshot message: {0}")]
     OneShotSendError(String),
-    #[error("Failed to join task")]
+    #[error(transparent)]
     JoinError(#[from] task::JoinHandleError),
+    #[error("Glados channel closed unexpectedly")]
+    ChannelClosed,
 }
 
 pub struct Glados {
@@ -163,9 +163,14 @@ async fn glados_loop(
                 // Remove the task, preserving ownership
                 let task = glados.active_tasks.swap_remove(task_position);
 
-                // we need to wait on the handle so we Actually get the error trace /
-                // result
-                task.join_handle.try_join().await?;
+                // Here we first get a result indicating whether the join was successful or not,
+                // then we get the actual result of the task.
+                let r = task.join_handle.try_join().await?;
+
+                match r {
+                    Ok(v) => info!("Task {} finished successfully: {:?}", task.id, v),
+                    Err(e) => error!("Task {} finished with error: {:?}", task.id, e),
+                }
             }
             Some(ToGladosMsg::GracefulShutdown) => {
                 info!("Graceful shutdown started");
@@ -184,12 +189,11 @@ async fn glados_loop(
                         JoinHandle::OSThread(handle) => handle.thread().unpark(), // ????
                     }
                 }
-                // finish immediately
-                break;
+                return Ok(());
             }
             None => {
                 error!("Channel closed");
-                break;
+                return Err(GladosError::ChannelClosed);
             }
         }
     }
