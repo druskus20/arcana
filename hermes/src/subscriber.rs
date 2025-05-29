@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::message::{DynClonableMessage, TypeErasedMessage};
 
 pub struct Subscription<T> {
-    subscriber_id: Uuid,
+    _subscriber_id: Uuid,
     message_type: PhantomData<T>,
     receiver: Receiver<TypeErasedMessage>,
 }

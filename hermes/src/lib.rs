@@ -137,8 +137,8 @@ async fn hermes_loop(
                 }
             }
             ToHermesMsg::Unsubscribe {
-                subscriber_id,
-                message_meta,
+                _subscriber_id,
+                _message_meta,
             } => todo!(),
             ToHermesMsg::Terminate => break,
         }
@@ -235,7 +235,7 @@ impl HermesHandle {
         Ok(())
     }
     /// Gives away the subscription
-    pub async fn unsubscribe<T>(&self, s: Subscription<T>) -> Result<(), HermesError> {
+    pub async fn unsubscribe<T>(&self, _s: Subscription<T>) -> Result<(), HermesError> {
         todo!()
     }
     pub async fn terminate(&self) -> Result<(), HermesError> {
@@ -256,8 +256,8 @@ pub enum ToHermesMsg {
         criteria: Box<dyn subscriber::Criteria>,
     },
     Unsubscribe {
-        subscriber_id: Uuid,
-        message_meta: MessageMeta,
+        _subscriber_id: Uuid,
+        _message_meta: MessageMeta,
     },
     Terminate,
 }
