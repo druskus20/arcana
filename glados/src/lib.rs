@@ -1,9 +1,11 @@
+use futures::FutureExt;
 use task::{AsyncTaskCtx, JoinHandle, TaskHandle};
 use thiserror::Error;
 use tokio::sync::{
     mpsc::{Receiver, Sender},
     oneshot::Sender as OneShotSender,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -66,25 +68,31 @@ pub enum SpawnTaskError {
 }
 
 impl GladosHandle {
-    pub fn spawn_async<F, Fut, Ctx, E>(
+    pub fn spawn_async<F, Fut, Ctx, E, CF, E2, Fut2>(
         &self,
         name: &str,
         ctx: Ctx,
         f: F,
+        f_cancel: CF,
     ) -> Result<(), SpawnTaskError>
     where
         F: 'static + Send + FnOnce(Ctx) -> Fut,
         Fut: Send + std::future::Future<Output = Result<(), E>>,
         Ctx: 'static + Send,
         E: Send + 'static,
+        CF: 'static + Send + FnOnce() -> Fut2,
+        Fut2: Send + std::future::Future<Output = Result<(), E2>>,
+        E2: Send + 'static,
     {
         debug!("Spawning async task: {}", name);
 
+        let cancellation_token = CancellationToken::new();
         let (notify_ready_to_start, notify_ready_to_start_receiver) =
             tokio::sync::oneshot::channel();
         // Spawn the task - which starts executing immediately, but will be paused until Glados
         // notifies it to start
         let join_handle = tokio::task::spawn({
+            let cancellation_token = cancellation_token.clone();
             let to_glados = self.to_glados.clone();
             async move {
                 let uuid = notify_ready_to_start_receiver.await?;
@@ -96,16 +104,27 @@ impl GladosHandle {
                     },
                 };
 
-                let r = f(ctx).await;
+                let f = f(ctx);
+                let f_cancel = cancellation_token.cancelled().then(|_| async move {
+                    f_cancel().await
+                    //to_glados.try_send(ToGladosMsg::RemoveTask(uuid)).unwrap();
+                });
+
+                tokio::select! {
+                    r = f => {
+                    //to_glados.try_send(ToGladosMsg::RemoveTask(uuid)).unwrap();
+                        r.map_err(|e| TaskError::TaskFailed(Box::new(e)))
+                    },
+                    r = f_cancel => {
+                        r.map_err(|e| TaskError::CancellationError(Box::new(e)))
+                    },
+                }?;
                 to_glados.try_send(ToGladosMsg::RemoveTask(uuid))?;
-                match r {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(TaskError::TaskFailed(Box::new(e))),
-                }
+                Ok(())
             }
         });
 
-        let task_handle = TaskHandle::new(name, JoinHandle::Tokio(join_handle));
+        let task_handle = TaskHandle::new(name, JoinHandle::Tokio(join_handle), cancellation_token);
 
         self.to_glados.try_send(ToGladosMsg::AddTask {
             task_handle,
@@ -204,7 +223,7 @@ async fn glados_loop(
                 info!("Graceful shutdown started");
                 for task in glados.active_tasks.iter_mut() {
                     info!("Cancelling task: {}", task);
-                    task.cancellation_token.cancel();
+                    task.cancel();
                 }
                 graceful_shutdown = true;
             }

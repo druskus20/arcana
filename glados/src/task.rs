@@ -1,6 +1,7 @@
 use std::{fmt::Display, sync::Arc};
 
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 use crate::{GladosHandle, ToGladosMsg, sync_to_async};
@@ -13,6 +14,8 @@ pub enum TaskError {
     OneShotRecvError(#[from] tokio::sync::oneshot::error::RecvError),
     #[error("Error sending message")]
     TrySendError(#[from] tokio::sync::mpsc::error::TrySendError<ToGladosMsg>),
+    #[error("Error in cancellation function")]
+    CancellationError(Box<dyn std::any::Any + Send>),
 }
 
 #[derive(Debug, Error)]
@@ -31,11 +34,11 @@ pub struct TaskHandle {
     /// Not unique, an id of a previous task might be reused (at least with Tokio)
     platform_id: _TaskPlatformId,
     pub(crate) join_handle: JoinHandle,
-    pub(crate) cancellation_token: tokio_util::sync::CancellationToken,
+    cancellation_token: CancellationToken,
 }
 
 impl TaskHandle {
-    pub fn new(name: &str, join_handle: JoinHandle) -> Self {
+    pub fn new(name: &str, join_handle: JoinHandle, cancellation_token: CancellationToken) -> Self {
         let kind = match &join_handle {
             JoinHandle::Tokio(_) => TaskKind::Async,
             JoinHandle::OSThread(_) => TaskKind::OSThread,
@@ -51,8 +54,12 @@ impl TaskHandle {
             kind,
             platform_id,
             join_handle,
-            cancellation_token: tokio_util::sync::CancellationToken::new(),
+            cancellation_token,
         }
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.cancellation_token.cancel()
     }
 }
 
