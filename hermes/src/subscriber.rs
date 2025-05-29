@@ -31,7 +31,7 @@ pub struct SubscriberRef {
     pub(crate) sender: Sender<TypeErasedMessage>,
 }
 
-pub trait Criteria: Send {
+pub trait Criteria: Send + Sync {
     fn matches(&self, subscriber: &SubscriberRef) -> bool;
 }
 pub struct SubscriberNameCriteria {
