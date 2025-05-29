@@ -16,7 +16,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 mod message;
-mod subscriber;
+pub mod subscriber;
 
 #[derive(Error, Debug)]
 pub enum HermesInternalError {
@@ -191,12 +191,12 @@ pub struct HermesHandle {
 impl HermesHandle {
     pub async fn subscribe_to<T: DynClonableMessage>(
         &self,
-        actor_name: String,
+        actor_name: &str,
     ) -> Result<Subscription<T>, SubscribeToError> {
         let (responder, receiver) = sync::oneshot::channel();
         self.to_hermes
             .send(ToHermesMsg::SubscribeTo {
-                name: actor_name.clone(),
+                name: actor_name.to_owned(),
                 message_meta: MessageMeta::of::<T>(),
                 responder,
             })

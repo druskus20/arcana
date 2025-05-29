@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use tokio::sync::mpsc::{Receiver, Sender};
 use uuid::Uuid;
 
-use crate::message::TypeErasedMessage;
+use crate::message::{DynClonableMessage, TypeErasedMessage};
 
 pub struct Subscription<T> {
     subscriber_id: Uuid,
@@ -11,7 +11,7 @@ pub struct Subscription<T> {
     receiver: Receiver<TypeErasedMessage>,
 }
 
-impl<T> Subscription<T> {
+impl<T: DynClonableMessage> Subscription<T> {
     pub fn from_receiver(subscriber_id: Uuid, receiver: Receiver<TypeErasedMessage>) -> Self {
         Subscription {
             subscriber_id,
@@ -20,8 +20,9 @@ impl<T> Subscription<T> {
         }
     }
 
-    pub async fn recv(&mut self) -> Option<TypeErasedMessage> {
-        self.receiver.recv().await
+    pub async fn recv(&mut self) -> Option<T> {
+        let msg = self.receiver.recv().await;
+        msg.map(|msg| msg.cast_into())
     }
 }
 

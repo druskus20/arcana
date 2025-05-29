@@ -37,6 +37,8 @@ impl Hash for MessageMeta {
 pub struct TypeErasedMessage {
     pub(super) message: Box<dyn DynClonableMessage>,
     pub(super) meta: MessageMeta,
+    // TODO: Should we have a "origin" field to track where the message came from? - optionally
+    // also useful for authentication
 }
 
 impl TypeErasedMessage {
@@ -45,6 +47,10 @@ impl TypeErasedMessage {
             message: Box::new(message),
             meta: MessageMeta::of::<T>(),
         }
+    }
+
+    pub fn cast_into<T: DynClonableMessage>(self) -> T {
+        todo!()
     }
 }
 

@@ -23,8 +23,8 @@ pub enum GladosInternalError {
     SendError(#[from] tokio::sync::mpsc::error::SendError<ToGladosMsg>),
     #[error("Failed to send a oneshot message: {0}")]
     OneShotSendError(String),
-    #[error(transparent)]
-    JoinError(#[from] task::JoinHandleError),
+    #[error("Failed to join task: {0}")]
+    JoinError(String),
     #[error("Glados channel closed unexpectedly")]
     ChannelClosed,
 }
@@ -212,7 +212,11 @@ async fn glados_loop(
 
                 // Here we first get a result indicating whether the join was successful or not,
                 // then we get the actual result of the task.
-                let r = task.join_handle.try_join().await?;
+                let r = task
+                    .join_handle
+                    .try_join()
+                    .await
+                    .map_err(|e| GladosInternalError::JoinError(format!("{e}")));
 
                 match r {
                     Ok(v) => info!("Task {} finished successfully: {:?}", task.id, v),
