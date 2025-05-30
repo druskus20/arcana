@@ -1,6 +1,13 @@
-use std::marker::PhantomData;
+use std::{
+    marker::PhantomData,
+    pin::Pin,
+    task::{Context, Poll},
+};
 
+use futures::{Stream, StreamExt};
 use tokio::sync::mpsc::{Receiver, Sender};
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::message::{DynClonableMessage, TypeErasedMessage};
@@ -12,9 +19,9 @@ pub struct Subscription<T> {
 }
 
 impl<T: DynClonableMessage> Subscription<T> {
-    pub fn from_receiver(subscriber_id: Uuid, receiver: Receiver<TypeErasedMessage>) -> Self {
+    pub fn from_receiver(_subscriber_id: Uuid, receiver: Receiver<TypeErasedMessage>) -> Self {
         Subscription {
-            subscriber_id,
+            _subscriber_id,
             message_type: PhantomData,
             receiver,
         }
@@ -23,6 +30,10 @@ impl<T: DynClonableMessage> Subscription<T> {
     pub async fn recv(&mut self) -> Option<T> {
         let msg = self.receiver.recv().await;
         msg.map(|msg| msg.cast_into())
+    }
+
+    pub fn into_stream(self) -> impl Stream<Item = T> {
+        ReceiverStream::new(self.receiver).map(|msg| msg.cast_into::<T>())
     }
 }
 

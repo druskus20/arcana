@@ -2,9 +2,9 @@ use std::{fmt::Display, sync::Arc};
 
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::error;
 
-use crate::{GladosHandle, ToGladosMsg, sync_to_async};
+use crate::{ToGladosMsg, sync_to_async};
 
 #[derive(Debug, Error)]
 pub enum TaskError {
@@ -105,23 +105,5 @@ impl JoinHandle {
                     .map_err(|e| JoinHandleError::OSThreadJoinError(Box::new(e)))
             }
         }
-    }
-}
-
-trait TaskCtx {
-    fn glados(&self) -> &GladosHandle;
-    fn glados_cloned(&self) -> GladosHandle {
-        self.glados().clone()
-    }
-}
-
-pub struct AsyncTaskCtx<E> {
-    pub glados_handle: GladosHandle,
-    pub extra_ctx: E,
-}
-
-impl<E> TaskCtx for AsyncTaskCtx<E> {
-    fn glados(&self) -> &GladosHandle {
-        &self.glados_handle
     }
 }

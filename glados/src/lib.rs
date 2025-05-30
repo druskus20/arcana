@@ -1,5 +1,5 @@
 use futures::FutureExt;
-use task::{AsyncTaskCtx, JoinHandle, TaskHandle};
+use task::{JoinHandle, TaskHandle};
 use thiserror::Error;
 use tokio::sync::{
     mpsc::{Receiver, Sender},

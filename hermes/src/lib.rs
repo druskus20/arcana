@@ -2,6 +2,7 @@ use message::DynClonableMessage;
 use message::MessageMeta;
 use message::TypeErasedMessage;
 use spells::hashmap_ext::HashmapExt;
+use std::any::Any;
 use std::collections::HashMap;
 use subscriber::Criteria;
 use subscriber::SubscriberRef;

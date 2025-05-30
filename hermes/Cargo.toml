@@ -15,6 +15,7 @@ tokio = { version = "1.44", features = [
   "net",
   "io-util",
 ] }
-tokio-util = "0.7"
+tokio-util = { features = ["io"], version = "0.7" }
+tokio-stream = "0.1"
 futures = "0.3.31"
 tracing = "0.1"
