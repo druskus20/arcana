@@ -164,13 +164,13 @@ async fn glados_loop(
     loop {
         if graceful_shutdown {
             if !glados.active_tasks.is_empty() {
-                info!("Waiting for {} tasks to finish", glados.active_tasks.len());
+                debug!("Waiting for {} tasks to finish", glados.active_tasks.len());
             } else {
-                info!("All tasks finished, terminating");
+                debug!("All tasks finished, terminating");
                 break;
             }
         }
-        info!("Glados waiting for messages");
+        debug!("Glados waiting for messages");
         match from_handle.recv().await {
             Some(ToGladosMsg::AddTask {
                 task_handle,
@@ -188,7 +188,7 @@ async fn glados_loop(
                     continue;
                 }
                 // Normal behavior - add task
-                info!("Spawning task: {}", task_handle);
+                debug!("Spawning task: {}", task_handle);
 
                 let uuid = task_handle.id;
                 glados.active_tasks.push(task_handle);
@@ -199,7 +199,7 @@ async fn glados_loop(
                 })?;
             }
             Some(ToGladosMsg::RemoveTask(task)) => {
-                info!("Removing task: {}", task);
+                debug!("Removing task: {}", task);
                 // Find and remove the task in one step
                 let task_position = glados
                     .active_tasks
@@ -219,22 +219,22 @@ async fn glados_loop(
                     .map_err(|e| GladosInternalError::JoinError(format!("{e}")));
 
                 match r {
-                    Ok(v) => info!("Task {} finished successfully: {:?}", task.id, v),
+                    Ok(v) => debug!("Task {} finished successfully: {:?}", task.id, v),
                     Err(e) => error!("Task {} finished with error: {:?}", task.id, e),
                 }
             }
             Some(ToGladosMsg::GracefulShutdown) => {
-                info!("Graceful shutdown started");
+                debug!("Graceful shutdown started");
                 for task in glados.active_tasks.iter_mut() {
-                    info!("Cancelling task: {}", task);
+                    debug!("Cancelling task: {}", task);
                     task.cancel();
                 }
                 graceful_shutdown = true;
             }
             Some(ToGladosMsg::ForcedShutdown) => {
-                info!("Forced shutdown");
+                debug!("Forced shutdown");
                 for task in glados.active_tasks.iter_mut() {
-                    info!("Aborting task: {}", task);
+                    debug!("Aborting task: {}", task);
                     match &mut task.join_handle {
                         JoinHandle::Tokio(handle) => handle.abort(),
                         JoinHandle::OSThread(handle) => handle.thread().unpark(), // ????
@@ -248,7 +248,7 @@ async fn glados_loop(
             }
         }
     }
-    info!("Glados finished");
+    debug!("Glados finished");
     Ok(())
 }
 

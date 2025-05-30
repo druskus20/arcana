@@ -1,13 +1,8 @@
-use std::{
-    marker::PhantomData,
-    pin::Pin,
-    task::{Context, Poll},
-};
+use std::marker::PhantomData;
 
 use futures::{Stream, StreamExt};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
-use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::message::{DynClonableMessage, TypeErasedMessage};

@@ -1,8 +1,8 @@
+use itertools::Itertools;
 use message::DynClonableMessage;
 use message::MessageMeta;
 use message::TypeErasedMessage;
 use spells::hashmap_ext::HashmapExt;
-use std::any::Any;
 use std::collections::HashMap;
 use subscriber::Criteria;
 use subscriber::SubscriberRef;
@@ -12,7 +12,7 @@ use tokio::sync;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot::Sender as OneshotSender;
-use tracing::info;
+use tracing::debug;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -34,8 +34,10 @@ pub enum HermesInternalError {
 
 pub struct Hermes {
     channel_capacity: usize,
+    // A subscriber is subscribed to a single message type
     subscribers_by_id: HashMap<Uuid, SubscriberRef>,
-    subscriber_id_by_message_meta: HashMap<MessageMeta, Uuid>,
+    // Many subscribers can subscribe to the same message type
+    subscriber_id_by_message_meta: HashMap<MessageMeta, Vec<Uuid>>,
 }
 
 impl Hermes {
@@ -80,13 +82,32 @@ async fn hermes_loop(
                     subscriber_name: name.clone(),
                     sender,
                 };
-                let res = hermes
+
+                // TODO: clear this. But basically, if the message type is already subscribed to,
+                // then we push a new subscriber ID to the existing list.
+                // If the message type is not subscribed to, we create a new entry in the map.
+                if hermes
                     .subscriber_id_by_message_meta
-                    .fallible_insert(message_meta, subscriber_ref.subscriber_id);
-                if let Err(e) = res {
-                    warn!("Failed to insert subscriber: {e}");
-                    responder.send(SubscribeToResponse::AlreadySubscribed).ok();
-                    continue;
+                    .contains_key(&message_meta)
+                {
+                    let subscriber_ids = hermes
+                        .subscriber_id_by_message_meta
+                        .get_mut(&message_meta)
+                        .unwrap();
+                    if subscriber_ids.contains(&subscriber_ref.subscriber_id) {
+                        warn!(
+                            "Subscriber {} is already subscribed to message type: {:?}",
+                            name, message_meta,
+                        );
+                        responder.send(SubscribeToResponse::AlreadySubscribed).ok();
+                        continue;
+                    } else {
+                        subscriber_ids.push(subscriber_ref.subscriber_id);
+                    }
+                } else {
+                    hermes
+                        .subscriber_id_by_message_meta
+                        .insert(message_meta, vec![subscriber_ref.subscriber_id]);
                 }
 
                 let res = hermes
@@ -145,7 +166,7 @@ async fn hermes_loop(
         }
     }
 
-    info!("Hermes finished");
+    debug!("Hermes finished");
     Ok(())
 }
 
@@ -175,13 +196,15 @@ fn filter_subscribers_by_matching_type<'a>(
     hermes
         .subscriber_id_by_message_meta
         .iter()
-        .filter_map(move |(message_meta, subscriber_id)| {
+        .filter_map(move |(message_meta, subscriber_ids)| {
             if message_meta.type_id() == type_id {
-                Some(subscriber_id)
+                Some(subscriber_ids)
             } else {
                 None
             }
         })
+        .flatten()
+        .unique()
 }
 
 #[derive(Debug, Clone)]
