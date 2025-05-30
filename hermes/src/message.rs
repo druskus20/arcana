@@ -1,4 +1,6 @@
-use std::hash::Hash;
+use std::{any::Any, hash::Hash};
+
+use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub struct MessageMeta {
@@ -41,6 +43,13 @@ pub struct TypeErasedMessage {
     // also useful for authentication
 }
 
+#[derive(Error, Debug)]
+pub enum CastError {
+    #[error("Type mismatch when casting TypeErasedMessage")]
+    TypeMismatch(String),
+    #[error("Failed to downcast TypeErasedMessage")]
+    FailureToDowncast(String),
+}
 impl TypeErasedMessage {
     pub fn from<T: DynClonableMessage>(message: T) -> Self {
         TypeErasedMessage {
@@ -49,16 +58,37 @@ impl TypeErasedMessage {
         }
     }
 
-    pub fn cast_into<T: DynClonableMessage>(self) -> T {
-        todo!()
+    pub fn try_cast_into<T: DynClonableMessage>(self) -> Result<T, CastError> {
+        if self.meta.type_id != std::any::TypeId::of::<T>() {
+            return Err(CastError::TypeMismatch(format!(
+                "TypeErasedMessage type_id mismatch: expected {}, got {}",
+                std::any::type_name::<T>(),
+                self.meta.type_name
+            )));
+        }
+
+        let msg = self.message.as_any_box().downcast::<T>().map_err(|_| {
+            CastError::TypeMismatch(format!(
+                "Failed to downcast TypeErasedMessage from {} to {}",
+                self.meta.type_name,
+                std::any::type_name::<T>()
+            ))
+        })?;
+
+        Ok(*msg)
     }
 }
 
 pub trait DynClonableMessage: std::fmt::Debug + Send + Sync + 'static {
     fn clone_box(&self) -> Box<dyn DynClonableMessage>;
+    fn as_any_box(self: Box<Self>) -> Box<dyn Any + Send>;
 }
 
 impl<T: std::fmt::Debug + Send + Sync + 'static + Clone> DynClonableMessage for T {
+    fn as_any_box(self: Box<Self>) -> Box<dyn Any + Send> {
+        self
+    }
+
     fn clone_box(&self) -> Box<dyn DynClonableMessage> {
         Box::new(self.clone())
     }

@@ -29,11 +29,12 @@ impl<T: DynClonableMessage> Subscription<T> {
 
     pub async fn recv(&mut self) -> Option<T> {
         let msg = self.receiver.recv().await;
-        msg.map(|msg| msg.cast_into())
+        msg.map(|msg| msg.try_cast_into().expect("Failed to cast message"))
     }
 
     pub fn into_stream(self) -> impl Stream<Item = T> {
-        ReceiverStream::new(self.receiver).map(|msg| msg.cast_into::<T>())
+        ReceiverStream::new(self.receiver)
+            .map(|msg| msg.try_cast_into::<T>().expect("Failed to cast message"))
     }
 }
 
