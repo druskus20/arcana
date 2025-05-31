@@ -1,4 +1,4 @@
-use std::{any::Any, hash::Hash};
+use std::{any::Any, hash::Hash, sync::Arc};
 
 use thiserror::Error;
 
@@ -37,7 +37,7 @@ impl Hash for MessageMeta {
 
 #[derive(Debug)]
 pub struct TypeErasedMessage {
-    pub(super) message: Box<dyn DynClonableMessage>,
+    pub(super) message: Arc<dyn DynMessage>,
     pub(super) meta: MessageMeta,
     // TODO: Should we have a "origin" field to track where the message came from? - optionally
     // also useful for authentication
@@ -51,14 +51,14 @@ pub enum CastError {
     FailureToDowncast(String),
 }
 impl TypeErasedMessage {
-    pub fn from<T: DynClonableMessage>(message: T) -> Self {
+    pub fn from<T: DynMessage>(message: T) -> Self {
         TypeErasedMessage {
-            message: Box::new(message),
+            message: Arc::new(message),
             meta: MessageMeta::of::<T>(),
         }
     }
 
-    pub fn try_cast_into<T: DynClonableMessage>(self) -> Result<T, CastError> {
+    pub fn try_cast_into<T: DynMessage>(self) -> Result<Arc<T>, CastError> {
         if self.meta.type_id != std::any::TypeId::of::<T>() {
             return Err(CastError::TypeMismatch(format!(
                 "TypeErasedMessage type_id mismatch: expected {}, got {}",
@@ -67,7 +67,7 @@ impl TypeErasedMessage {
             )));
         }
 
-        let msg = self.message.as_any_box().downcast::<T>().map_err(|_| {
+        let msg = self.message.as_any_arc().downcast::<T>().map_err(|_| {
             CastError::TypeMismatch(format!(
                 "Failed to downcast TypeErasedMessage from {} to {}",
                 self.meta.type_name,
@@ -75,32 +75,23 @@ impl TypeErasedMessage {
             ))
         })?;
 
-        Ok(*msg)
+        Ok(msg)
     }
 }
 
-pub trait DynClonableMessage: std::fmt::Debug + Send + Sync + 'static {
-    fn clone_box(&self) -> Box<dyn DynClonableMessage>;
-    fn as_any_box(self: Box<Self>) -> Box<dyn Any + Send>;
+pub trait DynMessage: std::fmt::Debug + Send + Sync + 'static {
+    //fn clone_box(&self) -> Box<dyn DynMessage>;
+    fn as_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
 
-impl<T: std::fmt::Debug + Send + Sync + 'static + Clone> DynClonableMessage for T {
-    fn as_any_box(self: Box<Self>) -> Box<dyn Any + Send> {
+impl<T: std::fmt::Debug + Send + Sync + 'static> DynMessage for T {
+    fn as_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
         self
     }
 
-    fn clone_box(&self) -> Box<dyn DynClonableMessage> {
-        Box::new(self.clone())
-    }
-}
-
-impl Clone for TypeErasedMessage {
-    fn clone(&self) -> Self {
-        TypeErasedMessage {
-            message: self.message.clone_box(),
-            meta: self.meta.clone(),
-        }
-    }
+    //fn clone_box(&self) -> Box<dyn DynMessage> {
+    //    Box::new(self.clone())
+    //}
 }
 
 impl TypeErasedMessage {
@@ -109,5 +100,18 @@ impl TypeErasedMessage {
     }
     pub fn type_name(&self) -> &'static str {
         self.meta.type_name
+    }
+
+    pub fn shared(self) -> Arc<TypeErasedMessage> {
+        Arc::new(self)
+    }
+}
+
+impl Clone for TypeErasedMessage {
+    fn clone(&self) -> Self {
+        TypeErasedMessage {
+            message: Arc::clone(&self.message),
+            meta: self.meta.clone(),
+        }
     }
 }

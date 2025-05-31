@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use message::DynClonableMessage;
+use message::DynMessage;
 use message::MessageMeta;
 use message::TypeErasedMessage;
 use spells::hashmap_ext::HashmapExt;
@@ -213,7 +213,7 @@ pub struct HermesHandle {
 }
 
 impl HermesHandle {
-    pub async fn subscribe_to<T: DynClonableMessage>(
+    pub async fn subscribe_to<T: DynMessage>(
         &self,
         actor_name: &str,
     ) -> Result<Subscription<T>, SubscribeToError> {
@@ -236,7 +236,7 @@ impl HermesHandle {
             Err(_) => Err(SubscribeToError::FailedToReceiveResponse),
         }
     }
-    pub async fn deliver<T: DynClonableMessage>(&self, msg: T) -> Result<(), HermesError> {
+    pub async fn deliver<T: DynMessage>(&self, msg: T) -> Result<(), HermesError> {
         let type_erased_msg = TypeErasedMessage::from(msg);
         self.to_hermes
             .send(ToHermesMsg::Deliver(type_erased_msg))
@@ -244,7 +244,7 @@ impl HermesHandle {
         Ok(())
     }
 
-    pub async fn deliver_with_criteria<T: DynClonableMessage>(
+    pub async fn deliver_with_criteria<T: DynMessage>(
         &self,
         msg: T,
         criteria: impl Criteria + 'static,
@@ -308,4 +308,94 @@ pub enum SubscribeToError {
 pub enum HermesError {
     #[error("Failed to send message through Hermes channel")]
     SendError(#[from] tokio::sync::mpsc::error::SendError<ToHermesMsg>),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::subscriber::SubscriberIdCriteria;
+    use crate::subscriber::SubscriberNameCriteria;
+    use tokio::sync::mpsc;
+
+    #[derive(Debug, Clone)]
+    enum ClonableTestMessage {
+        Hello(String),
+        Goodbye(String),
+    }
+
+    #[tokio::test]
+    async fn test_hermes_subscribe_and_deliver_clonable() {
+        let hermes = Hermes::new(10);
+        let (handle, hermes_handle) = hermes.start().await;
+
+        let mut subscription = hermes_handle
+            .subscribe_to::<ClonableTestMessage>("test_actor")
+            .await
+            .expect("Failed to subscribe");
+
+        hermes_handle
+            .deliver(ClonableTestMessage::Hello("World".to_string()))
+            .await
+            .expect("Failed to deliver message");
+
+        if let Some(msg) = subscription.recv_owned().await {
+            match msg {
+                ClonableTestMessage::Hello(name) => assert_eq!(name, "World"),
+                _ => panic!("Unexpected message type received"),
+            }
+        } else {
+            panic!("No message received");
+        }
+
+        hermes_handle
+            .terminate()
+            .await
+            .expect("Failed to terminate Hermes");
+        handle
+            .await
+            .expect("Hermes task failed")
+            .expect("Error joining Hermes task");
+    }
+
+    #[derive(Debug, Clone)]
+    enum NonClonableTestMessage {
+        Hello(String),
+        Goodbye(String),
+    }
+
+    #[tokio::test]
+    async fn test_hermes_subscribe_and_deliver_non_clonable() {
+        let hermes = Hermes::new(10);
+        let (handle, hermes_handle) = hermes.start().await;
+
+        let mut subscription = hermes_handle
+            .subscribe_to::<NonClonableTestMessage>("test_actor")
+            .await
+            .expect("Failed to subscribe");
+
+        hermes_handle
+            .deliver(NonClonableTestMessage::Hello("World".to_string()))
+            .await
+            .expect("Failed to deliver message");
+
+        if let Some(msg) = subscription.recv_ref().await {
+            match msg {
+                NonClonableTestMessage::Hello(name) => assert_eq!(name, "World"),
+                _ => panic!("Unexpected message type received"),
+            }
+        } else {
+            panic!("No message received");
+        }
+
+        hermes_handle
+            .terminate()
+            .await
+            .expect("Failed to terminate Hermes");
+        handle
+            .await
+            .expect("Hermes task failed")
+            .expect("Error joining Hermes task");
+    }
 }
