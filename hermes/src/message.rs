@@ -43,6 +43,40 @@ pub struct TypeErasedMessage {
     // also useful for authentication
 }
 
+pub struct ExclusiveTypeErasedMessage {
+    pub(super) message: Box<dyn DynMessage>,
+    pub(super) meta: MessageMeta,
+}
+
+impl ExclusiveTypeErasedMessage {
+    pub fn from<T: DynMessage>(message: T, meta: MessageMeta) -> Self {
+        ExclusiveTypeErasedMessage {
+            message: Box::new(message),
+            meta,
+        }
+    }
+
+    pub fn try_cast_into<T: DynMessage>(self) -> Result<T, CastError> {
+        if self.meta.type_id != std::any::TypeId::of::<T>() {
+            return Err(CastError::TypeMismatch(format!(
+                "ExclusiveTypeErasedMessage type_id mismatch: expected {}, got {}",
+                std::any::type_name::<T>(),
+                self.meta.type_name
+            )));
+        }
+
+        let msg = self.message.as_any_box().downcast::<T>().map_err(|_| {
+            CastError::FailureToDowncast(format!(
+                "Failed to downcast ExclusiveTypeErasedMessage from {} to {}",
+                self.meta.type_name,
+                std::any::type_name::<T>()
+            ))
+        })?;
+
+        Ok(*msg)
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum CastError {
     #[error("Type mismatch when casting TypeErasedMessage")]
@@ -82,10 +116,15 @@ impl TypeErasedMessage {
 pub trait DynMessage: std::fmt::Debug + Send + Sync + 'static {
     //fn clone_box(&self) -> Box<dyn DynMessage>;
     fn as_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
+    fn as_any_box(self: Box<Self>) -> Box<dyn Any + Send + Sync>;
 }
 
 impl<T: std::fmt::Debug + Send + Sync + 'static> DynMessage for T {
     fn as_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
+
+    fn as_any_box(self: Box<Self>) -> Box<dyn Any + Send + Sync> {
         self
     }
 

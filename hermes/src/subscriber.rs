@@ -1,11 +1,12 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::{marker::PhantomData, ops::Sub, sync::Arc};
 
 use futures::{Stream, StreamExt};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
+use tracing::Subscriber;
 use uuid::Uuid;
 
-use crate::message::{DynMessage, TypeErasedMessage};
+use crate::message::{DynMessage, ExclusiveTypeErasedMessage, TypeErasedMessage};
 
 pub struct Subscription<T> {
     _subscriber_id: Uuid,
@@ -26,7 +27,7 @@ impl<T: DynMessage> Subscription<T> {
         }
     }
 
-    pub async fn recv(&mut self) -> Option<Arc<T>> {
+    pub async fn recv_arc(&mut self) -> Option<Arc<T>> {
         let msg = self.receiver.recv().await;
         if msg.is_some() {
             self.last_msg = None;
@@ -49,7 +50,7 @@ impl<T: DynMessage> Subscription<T> {
 }
 
 impl<T: DynMessage + Clone> Subscription<T> {
-    pub async fn recv_owned(&mut self) -> Option<T> {
+    pub async fn recv_cloned(&mut self) -> Option<T> {
         let msg = self.receiver.recv().await;
         if msg.is_none() {
             self.last_msg = None;
@@ -61,22 +62,76 @@ impl<T: DynMessage + Clone> Subscription<T> {
     }
 }
 
+pub struct ExclusiveSubscription<T> {
+    _subscriber_id: Uuid,
+    message_type: PhantomData<T>,
+    receiver: Receiver<ExclusiveTypeErasedMessage>,
+}
+
+impl<T: DynMessage> ExclusiveSubscription<T> {
+    pub fn from_receiver(
+        _subscriber_id: Uuid,
+        receiver: Receiver<ExclusiveTypeErasedMessage>,
+    ) -> Self {
+        ExclusiveSubscription {
+            _subscriber_id,
+            message_type: PhantomData,
+            receiver,
+        }
+    }
+
+    pub async fn recv(&mut self) -> Option<T> {
+        let msg = self.receiver.recv().await;
+        msg.map(|msg| msg.try_cast_into().expect("Failed to cast message"))
+    }
+}
+
+pub struct MultiSubscriberRef {
+    pub(crate) subscriber_id: Uuid,
+    pub(crate) subscriber_name: String,
+    pub(crate) sender: Sender<TypeErasedMessage>,
+}
 pub struct SubscriberRef {
     pub(crate) subscriber_id: Uuid,
     pub(crate) subscriber_name: String,
     pub(crate) sender: Sender<TypeErasedMessage>,
 }
 
+pub trait SubscriberInfo {
+    fn subscriber_id(&self) -> Uuid;
+    fn subscriber_name(&self) -> &str;
+}
+
+impl SubscriberInfo for SubscriberRef {
+    fn subscriber_id(&self) -> Uuid {
+        self.subscriber_id
+    }
+
+    fn subscriber_name(&self) -> &str {
+        &self.subscriber_name
+    }
+}
+
+impl SubscriberInfo for MultiSubscriberRef {
+    fn subscriber_id(&self) -> Uuid {
+        self.subscriber_id
+    }
+
+    fn subscriber_name(&self) -> &str {
+        &self.subscriber_name
+    }
+}
+
 pub trait Criteria: Send + Sync {
-    fn matches(&self, subscriber: &SubscriberRef) -> bool;
+    fn matches(&self, subscriber: &dyn SubscriberInfo) -> bool;
 }
 pub struct SubscriberNameCriteria {
     name: &'static str,
 }
 
 impl Criteria for SubscriberNameCriteria {
-    fn matches(&self, subscriber: &SubscriberRef) -> bool {
-        subscriber.subscriber_name == self.name
+    fn matches(&self, subscriber: &dyn SubscriberInfo) -> bool {
+        subscriber.subscriber_name() == self.name
     }
 }
 
@@ -85,7 +140,7 @@ pub struct SubscriberIdCriteria {
 }
 
 impl Criteria for SubscriberIdCriteria {
-    fn matches(&self, subscriber: &SubscriberRef) -> bool {
-        subscriber.subscriber_id == self.subscriber_id
+    fn matches(&self, subscriber: &dyn SubscriberInfo) -> bool {
+        subscriber.subscriber_id() == self.subscriber_id
     }
 }
