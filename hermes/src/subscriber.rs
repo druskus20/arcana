@@ -1,12 +1,10 @@
-use std::{marker::PhantomData, ops::Sub, sync::Arc};
-
 use futures::{Stream, StreamExt};
+use std::{marker::PhantomData, sync::Arc};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::Subscriber;
 use uuid::Uuid;
 
-use crate::message::{DynMessage, ExclusiveTypeErasedMessage, TypeErasedMessage};
+use crate::message::{DynMessage, TypeErasedMessage};
 
 pub struct Subscription<T> {
     _subscriber_id: Uuid,
@@ -56,7 +54,12 @@ impl<T: DynMessage + Clone> Subscription<T> {
             self.last_msg = None;
         }
         msg.map(|msg| {
-            let arc = msg.try_cast_into().expect("Failed to cast message");
+            let arc = msg.try_cast_into().unwrap_or_else(|e| {
+                panic!(
+                    "Failed to cast message to {}: {e}",
+                    std::any::type_name::<T>()
+                )
+            });
             Arc::unwrap_or_clone(arc)
         })
     }
@@ -65,14 +68,11 @@ impl<T: DynMessage + Clone> Subscription<T> {
 pub struct ExclusiveSubscription<T> {
     _subscriber_id: Uuid,
     message_type: PhantomData<T>,
-    receiver: Receiver<ExclusiveTypeErasedMessage>,
+    receiver: Receiver<TypeErasedMessage>,
 }
 
 impl<T: DynMessage> ExclusiveSubscription<T> {
-    pub fn from_receiver(
-        _subscriber_id: Uuid,
-        receiver: Receiver<ExclusiveTypeErasedMessage>,
-    ) -> Self {
+    pub fn from_receiver(_subscriber_id: Uuid, receiver: Receiver<TypeErasedMessage>) -> Self {
         ExclusiveSubscription {
             _subscriber_id,
             message_type: PhantomData,
@@ -82,15 +82,18 @@ impl<T: DynMessage> ExclusiveSubscription<T> {
 
     pub async fn recv(&mut self) -> Option<T> {
         let msg = self.receiver.recv().await;
-        msg.map(|msg| msg.try_cast_into().expect("Failed to cast message"))
+        msg.map(|msg| {
+            msg.try_cast_into_owned().unwrap_or_else(|e| {
+                panic!(
+                    "Failed to cast message to {}: {e}",
+                    std::any::type_name::<T>()
+                )
+            })
+        })
     }
 }
 
-pub struct MultiSubscriberRef {
-    pub(crate) subscriber_id: Uuid,
-    pub(crate) subscriber_name: String,
-    pub(crate) sender: Sender<TypeErasedMessage>,
-}
+#[derive(Debug)]
 pub struct SubscriberRef {
     pub(crate) subscriber_id: Uuid,
     pub(crate) subscriber_name: String,
@@ -103,16 +106,6 @@ pub trait SubscriberInfo {
 }
 
 impl SubscriberInfo for SubscriberRef {
-    fn subscriber_id(&self) -> Uuid {
-        self.subscriber_id
-    }
-
-    fn subscriber_name(&self) -> &str {
-        &self.subscriber_name
-    }
-}
-
-impl SubscriberInfo for MultiSubscriberRef {
     fn subscriber_id(&self) -> Uuid {
         self.subscriber_id
     }

@@ -1,13 +1,13 @@
 use itertools::Itertools;
 use message::DynMessage;
-use message::ExclusiveTypeErasedMessage;
 use message::MessageMeta;
 use message::TypeErasedMessage;
+use spells::hashmap_ext::HashMapExtError;
 use spells::hashmap_ext::HashmapExt;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use subscriber::Criteria;
 use subscriber::ExclusiveSubscription;
-use subscriber::MultiSubscriberRef;
 use subscriber::SubscriberRef;
 use subscriber::Subscription;
 use thiserror::Error;
@@ -16,6 +16,8 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot::Sender as OneshotSender;
 use tracing::debug;
+use tracing::error;
+use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -26,21 +28,19 @@ pub mod subscriber;
 pub enum HermesInternalError {
     #[error("Failed to send opaque message through oneshot channel")]
     OneShotSendError,
-    #[error("Failed to send message through mpsc channel")]
-    SendError {
-        #[source]
-        source: tokio::sync::mpsc::error::SendError<TypeErasedMessage>,
-    },
+    #[error("Failed to send message through mpsc channel {0}")]
+    SendError(String),
     #[error("Subscriber not found")]
     SubscriberNotFound,
 }
 
+#[derive(Debug)]
 pub struct Hermes {
     channel_capacity: usize,
     // Subscribers to messages that can only have one recipient
     single_subscriber_by_message_meta: HashMap<MessageMeta, SubscriberRef>,
     // A subscriber is subscribed to a single message type
-    multi_subscribers_by_id: HashMap<Uuid, MultiSubscriberRef>,
+    multi_subscribers_by_id: HashMap<Uuid, SubscriberRef>,
     // Many subscribers can subscribe to the same message type
     multi_subscriber_id_by_message_meta: HashMap<MessageMeta, Vec<Uuid>>,
 }
@@ -73,102 +73,153 @@ async fn hermes_loop(
     mut from_handle: sync::mpsc::Receiver<ToHermesMsg>,
 ) -> Result<(), HermesInternalError> {
     while let Some(msg) = from_handle.recv().await {
+        trace!("{:?}", hermes);
+        dbg!(&hermes);
         // Process the message here
         match msg {
             ToHermesMsg::SubscribeTo {
                 name,
                 message_meta,
                 responder,
+                exclusive: false,
             } => {
                 // Create a reference to the subscriber and store it. Respond with a channel to
                 // receive Hermes messages.
                 let (sender, receiver) = sync::mpsc::channel(hermes.channel_capacity);
-                let subscriber_ref = MultiSubscriberRef {
+                let subscriber_ref = SubscriberRef {
                     subscriber_id: Uuid::new_v4(),
                     subscriber_name: name.clone(),
                     sender,
                 };
 
-                // TODO: clear this. But basically, if the message type is already subscribed to,
-                // then we push a new subscriber ID to the existing list.
-                // If the message type is not subscribed to, we create a new entry in the map.
+                match hermes
+                    .multi_subscriber_id_by_message_meta
+                    .entry(message_meta.clone())
+                {
+                    Entry::Occupied(mut entry) => {
+                        let subscriber_ids = entry.get_mut();
+                        if subscriber_ids.contains(&subscriber_ref.subscriber_id) {
+                            warn!(
+                                "Subscriber {} is already subscribed to message type: {:?}",
+                                name, message_meta,
+                            );
+                            let r = responder.send(Err(SubscribeToError::AlreadySubscribed));
+                            if r.is_err() {
+                                return Err(HermesInternalError::OneShotSendError);
+                            }
+                            continue;
+                        } else {
+                            subscriber_ids.push(subscriber_ref.subscriber_id);
+                        }
+                    }
+                    Entry::Vacant(entry) => {
+                        entry.insert(vec![subscriber_ref.subscriber_id]);
+                    }
+                }
+
+                // Finally insert the subscriber reference into the multi-subscriber map.
+                let res = hermes
+                    .multi_subscribers_by_id
+                    .fallible_insert(subscriber_ref.subscriber_id, subscriber_ref);
+
+                dbg!(&res);
+
+                match res {
+                    Ok(_) => {
+                        responder
+                            .send(Ok(receiver))
+                            .map_err(|_| HermesInternalError::OneShotSendError)?;
+                    }
+                    Err(HashMapExtError::KeyAlreadyExists) => {
+                        responder
+                            .send(Err(SubscribeToError::AlreadySubscribed))
+                            .map_err(|_| HermesInternalError::OneShotSendError)?;
+                        continue;
+                    }
+                }
+            }
+            ToHermesMsg::SubscribeTo {
+                name,
+                message_meta,
+                responder,
+                exclusive: true,
+            } => {
+                // First, check if an exclusive subscriber already exists for this message type.
+                if hermes
+                    .single_subscriber_by_message_meta
+                    .contains_key(&message_meta)
+                {
+                    responder
+                        .send(Err(SubscribeToError::ExclusiveSubscriberAlreadyExists))
+                        .map_err(|_| HermesInternalError::OneShotSendError)?;
+                    continue;
+                }
+
+                // Then check if a subscriber exists for this messag  type in the multi-subscriber map.
                 if hermes
                     .multi_subscriber_id_by_message_meta
                     .contains_key(&message_meta)
                 {
-                    let subscriber_ids = hermes
-                        .multi_subscriber_id_by_message_meta
-                        .get_mut(&message_meta)
-                        .unwrap();
-                    if subscriber_ids.contains(&subscriber_ref.subscriber_id) {
-                        warn!(
-                            "Subscriber {} is already subscribed to message type: {:?}",
-                            name, message_meta,
-                        );
-                        let r = responder.send(Err(SubscribeToError::AlreadySubscribed));
-                        if r.is_err() {
-                            return Err(HermesInternalError::OneShotSendError);
-                        }
-                        continue;
-                    } else {
-                        subscriber_ids.push(subscriber_ref.subscriber_id);
-                    }
-                } else {
-                    hermes
-                        .multi_subscriber_id_by_message_meta
-                        .insert(message_meta, vec![subscriber_ref.subscriber_id]);
-                }
-
-                let res = hermes
-                    .multi_subscribers_by_id
-                    .fallible_insert(subscriber_ref.subscriber_id, subscriber_ref);
-                if let Err(e) = res {
-                    warn!("Failed to insert subscriber: {e}");
-                    let r = responder.send(Err(SubscribeToError::AlreadySubscribed));
-                    if r.is_err() {
-                        return Err(HermesInternalError::OneShotSendError);
-                    }
+                    responder
+                        .send(Err(SubscribeToError::SubscriberFound))
+                        .map_err(|_| HermesInternalError::OneShotSendError)?;
                     continue;
                 }
+                // Create a reference to the subscriber and store it. Respond with a channel to
+                // receive Hermes messages.
+                let (sender, receiver) = sync::mpsc::channel(hermes.channel_capacity);
+                let subscriber_ref = SubscriberRef {
+                    subscriber_id: Uuid::new_v4(),
+                    subscriber_name: name.clone(),
+                    sender,
+                };
+                hermes
+                    .single_subscriber_by_message_meta
+                    .insert(message_meta, subscriber_ref);
 
                 responder
                     .send(Ok(receiver))
                     .map_err(|_| HermesInternalError::OneShotSendError)?;
             }
-            ToHermesMsg::Deliver(msg) => {
-                // TODO: deliver must support delivering an owned value to A SINGLE EXCLUSIVE SUB
-                let subscriber_ids_matching_type =
-                    filter_subscribers_by_matching_type(&hermes, &msg).collect::<Vec<_>>();
-
-                if subscriber_ids_matching_type.is_empty() {
-                    warn!(
-                        "No subscribers matching type for message: {}",
-                        msg.type_name()
-                    );
+            // This method overloads two types of deliveries:
+            //     - Single (exclusive) subscriber delivery
+            //     - Multi subscriber delivery (can have an optional criteria)
+            ToHermesMsg::Deliver { msg, criteria } => {
+                if let Some(exclusive) = try_find_exclusive_subscriber_for_meta(&hermes, &msg.meta)
+                {
+                    exclusive
+                        .sender
+                        .send(msg.clone())
+                        .await
+                        .map_err(|e| HermesInternalError::SendError(format!("{e:?}")))?;
                 } else {
-                    send_msg_to_subscribers(&hermes, msg, subscriber_ids_matching_type).await?;
-                }
-            }
-            ToHermesMsg::DeliverWithCriteria { msg, criteria } => {
-                let subscriber_ids_matching_type =
-                    filter_subscribers_by_matching_type(&hermes, &msg);
-
-                let subscriber_ids_matching_criteria = subscriber_ids_matching_type
-                    .filter(|&subscriber_id| {
-                        hermes
-                            .multi_subscribers_by_id
-                            .get(subscriber_id)
-                            .is_some_and(|subscriber| criteria.matches(subscriber))
-                    })
-                    .collect::<Vec<_>>();
-
-                if subscriber_ids_matching_criteria.is_empty() {
-                    warn!(
-                        "No subscribers matching criteria for message: {}",
-                        msg.type_name()
-                    );
-                } else {
-                    send_msg_to_subscribers(&hermes, msg, subscriber_ids_matching_criteria).await?;
+                    let subscriber_ids_matching_type =
+                        filter_subscribers_by_matching_type(&hermes, &msg);
+                    let subscriber_ids_matching_criteria: Vec<&Uuid> =
+                        if let Some(criteria) = criteria {
+                            subscriber_ids_matching_type
+                                .into_iter()
+                                .filter(|subscriber_id| {
+                                    hermes
+                                        .multi_subscribers_by_id
+                                        .get(subscriber_id)
+                                        .is_some_and(|subscriber| criteria.matches(subscriber))
+                                })
+                                .collect()
+                        } else {
+                            subscriber_ids_matching_type.collect()
+                        };
+                    if !subscriber_ids_matching_criteria.is_empty() {
+                        dbg!("sending");
+                        dbg!(&subscriber_ids_matching_criteria);
+                        send_msg_to_subscribers(&hermes, msg, subscriber_ids_matching_criteria)
+                            .await?;
+                    } else {
+                        warn!(
+                            "No subscribers matching criteria for message: {}",
+                            msg.type_name()
+                        );
+                    }
                 }
             }
             ToHermesMsg::Unsubscribe {
@@ -176,11 +227,43 @@ async fn hermes_loop(
                 _message_meta,
             } => todo!(),
             ToHermesMsg::Terminate => break,
-            ToHermesMsg::ExclusiveSubscribeTo {
-                subscriber_id,
-                message_meta,
-                responder,
-            } => todo!(),
+            //ToHermesMsg::SubscribeTo {
+            //    name,
+            //    message_meta,
+            //    responder,
+            //    exclusive,
+            //} => {
+            //    // Create a reference to the exclusive subscriber and store it.
+            //    let (sender, receiver) = sync::mpsc::channel(hermes.channel_capacity);
+            //    let subscriber_ref = SubscriberRef {
+            //        subscriber_id: Uuid::new_v4(),
+            //        subscriber_name: name,
+            //        sender,
+            //    };
+
+            //    if hermes
+            //        .single_subscriber_by_message_meta
+            //        .contains_key(&message_meta)
+            //    {
+            //        warn!(
+            //            "Exclusive subscriber already exists for message type: {:?}",
+            //            message_meta
+            //        );
+            //        let r = responder.send(Err(SubscribeToError::ExclusiveSubscriberAlreadyExists));
+            //        if r.is_err() {
+            //            return Err(HermesInternalError::OneShotSendError);
+            //        }
+            //        continue;
+            //    }
+
+            //    hermes
+            //        .single_subscriber_by_message_meta
+            //        .insert(message_meta, subscriber_ref);
+
+            //    responder
+            //        .send(Ok(receiver))
+            //        .map_err(|_| HermesInternalError::OneShotSendError)?;
+            //}
         }
     }
 
@@ -201,24 +284,51 @@ async fn send_msg_to_subscribers(
             .sender
             .send(type_erased_msg.clone())
             .await
-            .map_err(|e| HermesInternalError::SendError { source: e })?;
+            .map_err(|e| HermesInternalError::SendError(format!("{e:?}")))?;
     }
     Ok(())
 }
 
-async fn send_msg_to_exclusive_subscriber(
-    hermes: &Hermes,
-    type_erased_msg: TypeErasedMessage,
-) -> Result<(), HermesInternalError> {
-    hermes
-        .single_subscriber_by_message_meta
-        .get(&type_erased_msg.meta)
-        .ok_or(HermesInternalError::SubscriberNotFound)?
-        .sender
-        .send(type_erased_msg)
-        .await
-        .map_err(|e| HermesInternalError::SendError { source: e })?;
-    Ok(())
+//async fn send_msg_to_exclusive_subscriber(
+//    hermes: &Hermes,
+//    type_erased_msg: ExclusiveTypeErasedMessage,
+//) -> Result<(), HermesInternalError> {
+//    hermes
+//        .single_subscriber_by_message_meta
+//        .get(&type_erased_msg.meta)
+//        .ok_or(HermesInternalError::SubscriberNotFound)?
+//        .sender
+//        .send(type_erased_msg)
+//        .await
+//        .map_err(|e| HermesInternalError::SendError(format!("{e:?}")))?;
+//
+//    Ok(())
+//}
+
+//fn filter_subscribers_by_matching_type<'a>(
+//    hermes: &'a Hermes,
+//    type_erased_msg: &TypeErasedMessage,
+//) -> impl Iterator<Item = &'a Uuid> {
+//    let type_id = type_erased_msg.type_id();
+//    hermes
+//        .multi_subscriber_id_by_message_meta
+//        .iter()
+//        .filter_map(move |(message_meta, subscriber_ids)| {
+//            if message_meta.type_id() == type_id {
+//                Some(subscriber_ids)
+//            } else {
+//                None
+//            }
+//        })
+//        .flatten()
+//        .unique()
+//}
+
+fn try_find_exclusive_subscriber_for_meta<'a>(
+    hermes: &'a Hermes,
+    meta: &MessageMeta,
+) -> Option<&'a SubscriberRef> {
+    hermes.single_subscriber_by_message_meta.get(meta)
 }
 
 fn filter_subscribers_by_matching_type<'a>(
@@ -226,6 +336,7 @@ fn filter_subscribers_by_matching_type<'a>(
     type_erased_msg: &TypeErasedMessage,
 ) -> impl Iterator<Item = &'a Uuid> {
     let type_id = type_erased_msg.type_id();
+
     hermes
         .multi_subscriber_id_by_message_meta
         .iter()
@@ -256,6 +367,7 @@ impl HermesHandle {
                 name: actor_name.to_owned(),
                 message_meta: MessageMeta::of::<T>(),
                 responder,
+                exclusive: false,
             })
             .await
             .map_err(|e| SubscribeToError::SendError { source: e })?;
@@ -271,17 +383,18 @@ impl HermesHandle {
     pub async fn exclusive_subscribe_to<T: DynMessage>(
         &self,
         actor_name: &str,
-    ) -> Result<ExclusiveSubscription<T>, ExclusiveSubscribeToError> {
+    ) -> Result<ExclusiveSubscription<T>, SubscribeToError> {
         let subscriber_id = Uuid::new_v4();
         let (responder, receiver) = sync::oneshot::channel();
         self.to_hermes
-            .send(ToHermesMsg::ExclusiveSubscribeTo {
-                subscriber_id,
+            .send(ToHermesMsg::SubscribeTo {
+                name: actor_name.to_owned(),
                 message_meta: MessageMeta::of::<T>(),
                 responder,
+                exclusive: true,
             })
             .await
-            .map_err(|e| ExclusiveSubscribeToError::SendError { source: e })?;
+            .map_err(|e| SubscribeToError::SendError { source: e })?;
 
         let exclusive_receiver = receiver.await??;
 
@@ -294,7 +407,10 @@ impl HermesHandle {
     pub async fn deliver<T: DynMessage>(&self, msg: T) -> Result<(), HermesError> {
         let type_erased_msg = TypeErasedMessage::from(msg);
         self.to_hermes
-            .send(ToHermesMsg::Deliver(type_erased_msg))
+            .send(ToHermesMsg::Deliver {
+                msg: type_erased_msg,
+                criteria: None,
+            })
             .await?;
         Ok(())
     }
@@ -306,9 +422,9 @@ impl HermesHandle {
     ) -> Result<(), HermesError> {
         let type_erased_msg = TypeErasedMessage::from(msg);
         self.to_hermes
-            .send(ToHermesMsg::DeliverWithCriteria {
+            .send(ToHermesMsg::Deliver {
                 msg: type_erased_msg,
-                criteria: Box::new(criteria),
+                criteria: Some(Box::new(criteria)),
             })
             .await?;
         Ok(())
@@ -328,17 +444,11 @@ pub enum ToHermesMsg {
         name: String,
         message_meta: MessageMeta,
         responder: OneshotSender<Result<Receiver<TypeErasedMessage>, SubscribeToError>>,
+        exclusive: bool,
     },
-    ExclusiveSubscribeTo {
-        subscriber_id: Uuid,
-        message_meta: MessageMeta,
-        responder:
-            OneshotSender<Result<Receiver<ExclusiveTypeErasedMessage>, ExclusiveSubscribeToError>>,
-    },
-    Deliver(TypeErasedMessage),
-    DeliverWithCriteria {
+    Deliver {
         msg: TypeErasedMessage,
-        criteria: Box<dyn subscriber::Criteria>,
+        criteria: Option<Box<dyn subscriber::Criteria>>,
     },
     Unsubscribe {
         _subscriber_id: Uuid,
@@ -351,20 +461,12 @@ pub enum ToHermesMsg {
 pub enum SubscribeToError {
     #[error("Already subscribed to this message type")]
     AlreadySubscribed,
-    #[error("Failed to receive response from Hermes")]
-    FailedToReceiveResponse,
-    #[error("Failed to send message through Hermes channel")]
-    SendError {
-        #[source]
-        source: tokio::sync::mpsc::error::SendError<ToHermesMsg>,
-    },
-    #[error("Failed to receive response from Hermes")]
-    RecvOneshotError(#[from] tokio::sync::oneshot::error::RecvError),
-}
-#[derive(Debug, Error)]
-pub enum ExclusiveSubscribeToError {
     #[error("Message type can only have one subscriber")]
-    SubscriberAlreadyExists,
+    ExclusiveSubscriberAlreadyExists,
+    #[error(
+        "A regular subscriber already exists for this message type, cannot create an exclusive subscriber"
+    )]
+    SubscriberFound,
     #[error("Failed to receive response from Hermes")]
     FailedToReceiveResponse,
     #[error("Failed to send message through Hermes channel")]
@@ -476,6 +578,7 @@ mod tests {
             .deliver(NonClonableTestMessage::Hello("World".to_string()))
             .await
             .expect("Failed to deliver message");
+        dbg!("delivered!");
 
         if let Some(msg) = subscription.recv().await {
             match msg {

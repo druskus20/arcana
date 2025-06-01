@@ -43,46 +43,14 @@ pub struct TypeErasedMessage {
     // also useful for authentication
 }
 
-pub struct ExclusiveTypeErasedMessage {
-    pub(super) message: Box<dyn DynMessage>,
-    pub(super) meta: MessageMeta,
-}
-
-impl ExclusiveTypeErasedMessage {
-    pub fn from<T: DynMessage>(message: T, meta: MessageMeta) -> Self {
-        ExclusiveTypeErasedMessage {
-            message: Box::new(message),
-            meta,
-        }
-    }
-
-    pub fn try_cast_into<T: DynMessage>(self) -> Result<T, CastError> {
-        if self.meta.type_id != std::any::TypeId::of::<T>() {
-            return Err(CastError::TypeMismatch(format!(
-                "ExclusiveTypeErasedMessage type_id mismatch: expected {}, got {}",
-                std::any::type_name::<T>(),
-                self.meta.type_name
-            )));
-        }
-
-        let msg = self.message.as_any_box().downcast::<T>().map_err(|_| {
-            CastError::FailureToDowncast(format!(
-                "Failed to downcast ExclusiveTypeErasedMessage from {} to {}",
-                self.meta.type_name,
-                std::any::type_name::<T>()
-            ))
-        })?;
-
-        Ok(*msg)
-    }
-}
-
 #[derive(Error, Debug)]
 pub enum CastError {
     #[error("Type mismatch when casting TypeErasedMessage")]
     TypeMismatch(String),
     #[error("Failed to downcast TypeErasedMessage")]
     FailureToDowncast(String),
+    #[error("Failed to unwrap arc in TypeErasedMessage, are there multiple references?")]
+    ArcUnwrapError,
 }
 impl TypeErasedMessage {
     pub fn from<T: DynMessage>(message: T) -> Self {
@@ -110,6 +78,25 @@ impl TypeErasedMessage {
         })?;
 
         Ok(msg)
+    }
+    pub fn try_cast_into_owned<T: DynMessage>(self) -> Result<T, CastError> {
+        if self.meta.type_id != std::any::TypeId::of::<T>() {
+            return Err(CastError::TypeMismatch(format!(
+                "TypeErasedMessage type_id mismatch: expected {}, got {}",
+                std::any::type_name::<T>(),
+                self.meta.type_name
+            )));
+        }
+
+        let msg = self.message.as_any_arc().downcast::<T>().map_err(|_| {
+            CastError::TypeMismatch(format!(
+                "Failed to downcast TypeErasedMessage from {} to {}",
+                self.meta.type_name,
+                std::any::type_name::<T>()
+            ))
+        })?;
+
+        Arc::try_unwrap(msg).map_err(|_| CastError::ArcUnwrapError)
     }
 }
 
