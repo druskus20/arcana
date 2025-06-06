@@ -73,7 +73,6 @@ async fn hermes_loop(
     mut from_handle: sync::mpsc::Receiver<ToHermesMsg>,
 ) -> Result<(), HermesInternalError> {
     while let Some(msg) = from_handle.recv().await {
-        trace!("{:?}", hermes);
         // Process the message here
         match msg {
             ToHermesMsg::SubscribeTo {
