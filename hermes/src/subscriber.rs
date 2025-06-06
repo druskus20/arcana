@@ -93,6 +93,17 @@ impl<T: DynMessage> ExclusiveSubscription<T> {
             })
         })
     }
+
+    pub fn into_stream(self) -> impl Stream<Item = T> {
+        ReceiverStream::new(self.receiver).map(|msg| {
+            msg.try_cast_into_owned().unwrap_or_else(|e| {
+                panic!(
+                    "Failed to cast message to {}: {e}",
+                    std::any::type_name::<T>()
+                )
+            })
+        })
+    }
 }
 
 #[derive(Debug)]
