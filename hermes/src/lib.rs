@@ -74,7 +74,6 @@ async fn hermes_loop(
 ) -> Result<(), HermesInternalError> {
     while let Some(msg) = from_handle.recv().await {
         trace!("{:?}", hermes);
-        dbg!(&hermes);
         // Process the message here
         match msg {
             ToHermesMsg::SubscribeTo {
@@ -121,8 +120,6 @@ async fn hermes_loop(
                 let res = hermes
                     .multi_subscribers_by_id
                     .fallible_insert(subscriber_ref.subscriber_id, subscriber_ref);
-
-                dbg!(&res);
 
                 match res {
                     Ok(_) => {
@@ -210,8 +207,6 @@ async fn hermes_loop(
                             subscriber_ids_matching_type.collect()
                         };
                     if !subscriber_ids_matching_criteria.is_empty() {
-                        dbg!("sending");
-                        dbg!(&subscriber_ids_matching_criteria);
                         send_msg_to_subscribers(&hermes, msg, subscriber_ids_matching_criteria)
                             .await?;
                     } else {
@@ -578,7 +573,6 @@ mod tests {
             .deliver(NonClonableTestMessage::Hello("World".to_string()))
             .await
             .expect("Failed to deliver message");
-        dbg!("delivered!");
 
         if let Some(msg) = subscription.recv().await {
             match msg {
