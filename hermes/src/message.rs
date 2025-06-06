@@ -60,7 +60,7 @@ impl TypeErasedMessage {
         }
     }
 
-    pub fn try_cast_into<T: DynMessage>(self) -> Result<Arc<T>, CastError> {
+    pub fn try_cast_into_arc<T: DynMessage>(self) -> Result<Arc<T>, CastError> {
         if self.meta.type_id != std::any::TypeId::of::<T>() {
             return Err(CastError::TypeMismatch(format!(
                 "TypeErasedMessage type_id mismatch: expected {}, got {}",

@@ -30,20 +30,22 @@ impl<T: DynMessage> Subscription<T> {
         if msg.is_some() {
             self.last_msg = None;
         }
-        msg.map(|msg| msg.try_cast_into().expect("Failed to cast message"))
+        msg.map(|msg| msg.try_cast_into_arc().expect("Failed to cast message"))
     }
 
     pub async fn recv_ref(&mut self) -> Option<&'_ T> {
         let msg = self.receiver.recv().await;
         if let Some(msg) = msg {
-            self.last_msg = Some(msg.try_cast_into().expect("Failed to cast message"));
+            self.last_msg = Some(msg.try_cast_into_arc().expect("Failed to cast message"));
         }
         self.last_msg.as_deref()
     }
 
     pub fn into_stream(self) -> impl Stream<Item = Arc<T>> {
-        ReceiverStream::new(self.receiver)
-            .map(|msg| msg.try_cast_into::<T>().expect("Failed to cast message"))
+        ReceiverStream::new(self.receiver).map(|msg| {
+            msg.try_cast_into_arc::<T>()
+                .expect("Failed to cast message")
+        })
     }
 }
 
@@ -54,7 +56,7 @@ impl<T: DynMessage + Clone> Subscription<T> {
             self.last_msg = None;
         }
         msg.map(|msg| {
-            let arc = msg.try_cast_into().unwrap_or_else(|e| {
+            let arc = msg.try_cast_into_arc().unwrap_or_else(|e| {
                 panic!(
                     "Failed to cast message to {}: {e}",
                     std::any::type_name::<T>()
