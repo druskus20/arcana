@@ -1,5 +1,5 @@
 use futures::{Stream, StreamExt};
-use std::{marker::PhantomData, sync::Arc};
+use std::{fmt::Display, marker::PhantomData, sync::Arc};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::message::{DynMessage, TypeErasedMessage};
 
 pub struct Subscription<T> {
-    _subscriber_id: Uuid,
+    pub id: Uuid,
     message_type: PhantomData<T>,
     receiver: Receiver<TypeErasedMessage>,
     // This is a workaround to be able to return references to the last message received
@@ -16,9 +16,9 @@ pub struct Subscription<T> {
 }
 
 impl<T: DynMessage> Subscription<T> {
-    pub fn from_receiver(_subscriber_id: Uuid, receiver: Receiver<TypeErasedMessage>) -> Self {
+    pub fn from_receiver(subscriber_id: Uuid, receiver: Receiver<TypeErasedMessage>) -> Self {
         Subscription {
-            _subscriber_id,
+            id: subscriber_id,
             message_type: PhantomData,
             receiver,
             last_msg: None,
@@ -128,13 +128,18 @@ impl SubscriberInfo for SubscriberRef {
     }
 }
 
-pub trait Criteria: Send + Sync {
+pub trait Criteria: Send + Sync + Display {
     fn matches(&self, subscriber: &dyn SubscriberInfo) -> bool;
 }
 pub struct SubscriberNameCriteria {
-    name: &'static str,
+    pub name: &'static str,
 }
 
+impl Display for SubscriberNameCriteria {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SubscriberNameCriteria(name={})", self.name)
+    }
+}
 impl Criteria for SubscriberNameCriteria {
     fn matches(&self, subscriber: &dyn SubscriberInfo) -> bool {
         subscriber.subscriber_name() == self.name
@@ -142,11 +147,30 @@ impl Criteria for SubscriberNameCriteria {
 }
 
 pub struct SubscriberIdCriteria {
-    subscriber_id: Uuid,
+    pub subscriber_id: Uuid,
 }
 
+impl Display for SubscriberIdCriteria {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "SubscriberIdCriteria(subscriber_id={})",
+            self.subscriber_id
+        )
+    }
+}
 impl Criteria for SubscriberIdCriteria {
     fn matches(&self, subscriber: &dyn SubscriberInfo) -> bool {
         subscriber.subscriber_id() == self.subscriber_id
+    }
+}
+
+pub trait BoxCriteriaEx {
+    fn as_debug_string(&self) -> String;
+}
+
+impl BoxCriteriaEx for Box<dyn Criteria> {
+    fn as_debug_string(&self) -> String {
+        format!("{}", self)
     }
 }

@@ -19,6 +19,9 @@ impl MessageMeta {
     pub fn type_id(&self) -> std::any::TypeId {
         self.type_id
     }
+    pub fn type_name(&self) -> &'static str {
+        self.type_name
+    }
 }
 
 impl PartialEq for MessageMeta {
