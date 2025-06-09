@@ -264,13 +264,7 @@ async fn hermes_loop(
                                     hermes
                                         .multi_subscribers_by_id
                                         .get(subscriber_id)
-                                        .is_some_and(|subscriber| {
-                                            dbg!(criteria.to_string());
-                                            dbg!(subscriber.subscriber_id());
-                                            dbg!(criteria.matches(subscriber));
-
-                                            criteria.matches(subscriber)
-                                        })
+                                        .is_some_and(|subscriber| criteria.matches(subscriber))
 
                                     // BUG: test delivering with criteria
                                 })
@@ -414,8 +408,6 @@ impl HermesHandle {
         criteria: impl Display + Criteria + 'static,
     ) -> Result<(), HermesError> {
         let type_erased_msg = TypeErasedMessage::from(msg);
-        dbg!(type_erased_msg.type_name());
-        dbg!(criteria.to_string());
         self.to_hermes
             .send(ToHermesMsg::Deliver {
                 msg: type_erased_msg,
