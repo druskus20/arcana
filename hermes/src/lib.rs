@@ -7,10 +7,8 @@ use spells::hashmap_ext::HashmapExt;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt::Display;
-use subscriber::BoxCriteriaEx;
 use subscriber::Criteria;
 use subscriber::ExclusiveSubscription;
-use subscriber::SubscriberInfo;
 use subscriber::SubscriberRef;
 use subscriber::Subscription;
 use thiserror::Error;
@@ -20,7 +18,6 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot::Sender as OneshotSender;
 use tracing::debug;
 use tracing::error;
-use tracing::info;
 use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
@@ -405,7 +402,7 @@ impl HermesHandle {
     pub async fn deliver_with_criteria<T: DynMessage>(
         &self,
         msg: T,
-        criteria: impl Display + Criteria + 'static,
+        criteria: impl Criteria + 'static,
     ) -> Result<(), HermesError> {
         let type_erased_msg = TypeErasedMessage::from(msg);
         self.to_hermes

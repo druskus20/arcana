@@ -164,13 +164,3 @@ impl Criteria for SubscriberIdCriteria {
         subscriber.subscriber_id() == self.subscriber_id
     }
 }
-
-pub trait BoxCriteriaEx {
-    fn as_debug_string(&self) -> String;
-}
-
-impl BoxCriteriaEx for Box<dyn Criteria> {
-    fn as_debug_string(&self) -> String {
-        format!("{}", self)
-    }
-}
