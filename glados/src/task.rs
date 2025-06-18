@@ -8,7 +8,7 @@ use crate::{ToGladosMsg, sync_to_async};
 
 #[derive(Debug, Error)]
 pub enum TaskError {
-    #[error("Task finished with unexpected failure")]
+    #[error("Async Task finished with unexpected failure")]
     TaskFailed(Box<dyn std::any::Any + Send>),
     #[error("Failed to receive oneshot message")]
     OneShotRecvError(#[from] tokio::sync::oneshot::error::RecvError),

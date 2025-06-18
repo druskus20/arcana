@@ -6,11 +6,12 @@ use tokio::sync::{
     oneshot::Sender as OneShotSender,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 mod sync_to_async;
 mod task;
+pub mod task_builder;
 pub use task::TaskError;
 
 #[derive(Error, Debug)]
@@ -125,6 +126,49 @@ impl GladosHandle {
         });
 
         let task_handle = TaskHandle::new(name, JoinHandle::Tokio(join_handle), cancellation_token);
+
+        self.to_glados.try_send(ToGladosMsg::AddTask {
+            task_handle,
+            responder: notify_ready_to_start,
+        })?;
+
+        Ok(())
+    }
+    pub fn spawn_thread<F, Ctx, E>(&self, name: &str, ctx: Ctx, f: F) -> Result<(), SpawnTaskError>
+    where
+        F: 'static + FnOnce((Ctx, CancellationToken)) -> Result<(), E> + Send,
+        Ctx: 'static + Send,
+        E: 'static + Send,
+    {
+        debug!("Spawning async task: {}", name);
+
+        let cancellation_token = CancellationToken::new();
+        let (notify_ready_to_start, notify_ready_to_start_receiver) =
+            tokio::sync::oneshot::channel();
+        // Spawn the task - which starts executing immediately, but will be paused until Glados
+        // notifies it to start
+        let join_handle = std::thread::spawn({
+            let cancellation_token = cancellation_token.clone();
+            let to_glados = self.to_glados.clone();
+            move || {
+                let uuid = notify_ready_to_start_receiver.blocking_recv()?;
+                let uuid = match uuid {
+                    Ok(uuid) => uuid,
+                    Err(e) => match e {
+                        // TODO: probably remove the task
+                        AddTaskError::ShutdownInProgress => todo!(),
+                    },
+                };
+
+                f((ctx, cancellation_token)).map_err(|e| TaskError::TaskFailed(Box::new(e)))?;
+
+                to_glados.try_send(ToGladosMsg::RemoveTask(uuid))?;
+                Ok(())
+            }
+        });
+
+        let task_handle =
+            TaskHandle::new(name, JoinHandle::OSThread(join_handle), cancellation_token);
 
         self.to_glados.try_send(ToGladosMsg::AddTask {
             task_handle,
