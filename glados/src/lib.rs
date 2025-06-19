@@ -9,7 +9,6 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-mod sync_to_async;
 mod task;
 pub mod task_builder;
 pub use task::TaskError;
@@ -134,11 +133,20 @@ impl GladosHandle {
 
         Ok(())
     }
-    pub fn spawn_thread<F, Ctx, E>(&self, name: &str, ctx: Ctx, f: F) -> Result<(), SpawnTaskError>
+    pub fn spawn_thread<F, Ctx, E, CF, Fut2, E2>(
+        &self,
+        name: &str,
+        ctx: Ctx,
+        f: F,
+        f_cancel: CF,
+    ) -> Result<(), SpawnTaskError>
     where
-        F: 'static + FnOnce((Ctx, CancellationToken)) -> Result<(), E> + Send,
+        F: 'static + FnOnce(Ctx) -> Result<(), E> + Send,
         Ctx: 'static + Send,
         E: 'static + Send,
+        CF: 'static + Send + FnOnce() -> Fut2,
+        Fut2: Send + std::future::Future<Output = Result<(), E2>>,
+        E2: Send + 'static,
     {
         debug!("Spawning async task: {}", name);
 
@@ -148,7 +156,6 @@ impl GladosHandle {
         // Spawn the task - which starts executing immediately, but will be paused until Glados
         // notifies it to start
         let join_handle = std::thread::spawn({
-            let cancellation_token = cancellation_token.clone();
             let to_glados = self.to_glados.clone();
             move || {
                 let uuid = notify_ready_to_start_receiver.blocking_recv()?;
@@ -160,12 +167,13 @@ impl GladosHandle {
                     },
                 };
 
-                f((ctx, cancellation_token)).map_err(|e| TaskError::TaskFailed(Box::new(e)))?;
+                f(ctx).map_err(|e| TaskError::TaskFailed(Box::new(e)))?;
 
                 to_glados.try_send(ToGladosMsg::RemoveTask(uuid))?;
                 Ok(())
             }
         });
+        // cancellation
 
         let task_handle =
             TaskHandle::new(name, JoinHandle::OSThread(join_handle), cancellation_token);
