@@ -100,21 +100,20 @@ where
         glados.spawn_async::<F, Fut, Ctx, E, CF, E2, Fut2>(&self.name, ctx, funct, cancel_funct)
     }
 }
-impl<F, Ctx, CF, E, Fut2, E2> TaskBuilder<F, CF, Ctx, HasFunct, HasCancelFunct, HasCtx>
+impl<F, Ctx, CF, E, Fut2> TaskBuilder<F, CF, Ctx, HasFunct, HasCancelFunct, HasCtx>
 where
     F: 'static + FnOnce(Ctx) -> Result<(), E> + Send,
     Ctx: 'static + Send,
     E: 'static + Send,
     CF: 'static + Send + FnOnce() -> Fut2,
-    Fut2: Send + std::future::Future<Output = Result<(), E2>>,
-    E2: Send + 'static,
+    Fut2: Send + std::future::Future<Output = ()>,
 {
     pub fn spawn_thread(self, glados: &crate::GladosHandle) -> Result<(), SpawnTaskError> {
         let funct = self.funct.expect("Function must be provided");
         let ctx = self.ctx.expect("Context must be provided");
         let cancel_funct = self.cancel_funct.expect("Cancel function must be provided");
 
-        glados.spawn_thread::<F, Ctx, E, CF, Fut2, E2>(&self.name, ctx, funct, cancel_funct)
+        glados.spawn_thread::<F, Ctx, E, CF, Fut2>(&self.name, ctx, funct, cancel_funct)
     }
 }
 

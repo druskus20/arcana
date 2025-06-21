@@ -133,7 +133,7 @@ impl GladosHandle {
 
         Ok(())
     }
-    pub fn spawn_thread<F, Ctx, E, CF, Fut2, E2>(
+    pub fn spawn_thread<F, Ctx, E, CF, Fut2>(
         &self,
         name: &str,
         ctx: Ctx,
@@ -145,8 +145,7 @@ impl GladosHandle {
         Ctx: 'static + Send,
         E: 'static + Send,
         CF: 'static + Send + FnOnce() -> Fut2,
-        Fut2: Send + std::future::Future<Output = Result<(), E2>>,
-        E2: Send + 'static,
+        Fut2: Send + std::future::Future<Output = ()>,
     {
         debug!("Spawning async task: {}", name);
 
@@ -156,6 +155,7 @@ impl GladosHandle {
         // Spawn the task - which starts executing immediately, but will be paused until Glados
         // notifies it to start
         let join_handle = std::thread::spawn({
+            let cancellation_token = cancellation_token.clone();
             let to_glados = self.to_glados.clone();
             move || {
                 let uuid = notify_ready_to_start_receiver.blocking_recv()?;
@@ -173,7 +173,6 @@ impl GladosHandle {
                 Ok(())
             }
         });
-        // cancellation
 
         let task_handle =
             TaskHandle::new(name, JoinHandle::OSThread(join_handle), cancellation_token);
