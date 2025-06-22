@@ -6,7 +6,7 @@ use tokio::sync::{
     oneshot::Sender as OneShotSender,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 mod task;
@@ -152,10 +152,31 @@ impl GladosHandle {
         let cancellation_token = CancellationToken::new();
         let (notify_ready_to_start, notify_ready_to_start_receiver) =
             tokio::sync::oneshot::channel();
+
+        // TODO: this might cause bugs. The cancellation task cannot start until the task is started.
+        let (notify_ready_to_cancel, notify_ready_to_cancel_receiver) =
+            tokio::sync::oneshot::channel();
+        tokio::task::spawn({
+            let name = name.to_owned();
+            let cancellation_token = cancellation_token.clone();
+            async move {
+                debug!("Spawning cancellation task for {}", name);
+                notify_ready_to_cancel_receiver.await.unwrap();
+                // exit
+                cancellation_token
+                    .cancelled()
+                    .then(|_| async move {
+                        debug!("Running cancellation function for {}", name);
+                        f_cancel().await;
+                        std::process::exit(1);
+                    })
+                    .await;
+            }
+        });
+
         // Spawn the task - which starts executing immediately, but will be paused until Glados
         // notifies it to start
         let join_handle = std::thread::spawn({
-            let cancellation_token = cancellation_token.clone();
             let to_glados = self.to_glados.clone();
             move || {
                 let uuid = notify_ready_to_start_receiver.blocking_recv()?;
@@ -166,6 +187,7 @@ impl GladosHandle {
                         AddTaskError::ShutdownInProgress => todo!(),
                     },
                 };
+                notify_ready_to_cancel.send(()).unwrap();
 
                 f(ctx).map_err(|e| TaskError::TaskFailed(Box::new(e)))?;
 
@@ -276,6 +298,7 @@ async fn glados_loop(
             }
             Some(ToGladosMsg::GracefulShutdown) => {
                 debug!("Graceful shutdown started");
+                debug!("Active tasks: {:?}", glados.active_tasks);
                 for task in glados.active_tasks.iter_mut() {
                     debug!("Cancelling task: {}", task);
                     task.cancel();

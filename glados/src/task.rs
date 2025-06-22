@@ -108,7 +108,7 @@ impl JoinHandle {
                 std::thread::spawn(move || {
                     let r = join_handle
                         .join()
-                        .map_err(JoinHandleError::OSThreadJoinError);
+                        .map_err(|e| JoinHandleError::OSThreadJoinError(e));
                     tx.send(r).expect("Failed to send result");
                 });
                 rx.await?
