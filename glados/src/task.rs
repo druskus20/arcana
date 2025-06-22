@@ -9,13 +9,13 @@ use crate::ToGladosMsg;
 #[derive(Debug, Error)]
 pub enum TaskError {
     #[error("Async Task finished with unexpected failure")]
-    TaskFailed(Box<dyn std::any::Any + Send>),
+    TaskFailed(Box<dyn Send + std::fmt::Debug>),
     #[error("Failed to receive oneshot message")]
     OneShotRecvError(#[from] tokio::sync::oneshot::error::RecvError),
     #[error("Error sending message")]
     TrySendError(#[from] tokio::sync::mpsc::error::TrySendError<ToGladosMsg>),
     #[error("Error in cancellation function")]
-    CancellationError(Box<dyn std::any::Any + Send>),
+    CancellationError(Box<dyn std::fmt::Debug + Send>),
 }
 
 #[derive(Debug, Error)]

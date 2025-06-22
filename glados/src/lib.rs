@@ -79,10 +79,10 @@ impl GladosHandle {
         F: 'static + Send + FnOnce(Ctx) -> Fut,
         Fut: Send + std::future::Future<Output = Result<(), E>>,
         Ctx: 'static + Send,
-        E: Send + 'static,
+        E: Send + 'static + std::fmt::Debug,
         CF: 'static + Send + FnOnce() -> Fut2,
         Fut2: Send + std::future::Future<Output = Result<(), E2>>,
-        E2: Send + 'static,
+        E2: Send + 'static + std::fmt::Debug,
     {
         debug!("Spawning async task: {}", name);
 
@@ -110,7 +110,7 @@ impl GladosHandle {
                     //to_glados.try_send(ToGladosMsg::RemoveTask(uuid)).unwrap();
                 });
 
-                tokio::select! {
+                let r = tokio::select! {
                     r = f => {
                     //to_glados.try_send(ToGladosMsg::RemoveTask(uuid)).unwrap();
                         r.map_err(|e| TaskError::TaskFailed(Box::new(e)))
@@ -118,7 +118,11 @@ impl GladosHandle {
                     r = f_cancel => {
                         r.map_err(|e| TaskError::CancellationError(Box::new(e)))
                     },
-                }?;
+                };
+                match r {
+                    Ok(_) => debug!("Task {} finished successfully", uuid),
+                    Err(e) => error!("Task {} finished with error: {:?}", uuid, e),
+                }
                 to_glados.try_send(ToGladosMsg::RemoveTask(uuid))?;
                 Ok(())
             }
@@ -143,7 +147,7 @@ impl GladosHandle {
     where
         F: 'static + FnOnce(Ctx) -> Result<(), E> + Send,
         Ctx: 'static + Send,
-        E: 'static + Send,
+        E: 'static + Send + std::fmt::Debug,
         CF: 'static + Send + FnOnce() -> Fut2,
         Fut2: Send + std::future::Future<Output = ()>,
     {
@@ -189,7 +193,11 @@ impl GladosHandle {
                 };
                 notify_ready_to_cancel.send(()).unwrap();
 
-                f(ctx).map_err(|e| TaskError::TaskFailed(Box::new(e)))?;
+                let r = f(ctx).map_err(|e| TaskError::TaskFailed(Box::new(e)));
+                match r {
+                    Ok(_) => debug!("Task {} finished successfully", uuid),
+                    Err(e) => error!("Task {} finished with error: {:?}", uuid, e),
+                }
 
                 to_glados.try_send(ToGladosMsg::RemoveTask(uuid))?;
                 Ok(())

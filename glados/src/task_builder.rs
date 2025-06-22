@@ -87,10 +87,10 @@ where
     F: 'static + Send + FnOnce(Ctx) -> Fut,
     Fut: Send + std::future::Future<Output = Result<(), E>>,
     Ctx: 'static + Send,
-    E: Send + 'static,
+    E: Send + 'static + std::fmt::Debug,
     CF: 'static + Send + FnOnce() -> Fut2,
     Fut2: Send + std::future::Future<Output = Result<(), E2>>,
-    E2: Send + 'static,
+    E2: Send + 'static + std::fmt::Debug,
 {
     pub fn spawn_async(self, glados: &crate::GladosHandle) -> Result<(), SpawnTaskError> {
         let funct = self.funct.expect("Function must be provided");
@@ -104,7 +104,7 @@ impl<F, Ctx, CF, E, Fut2> TaskBuilder<F, CF, Ctx, HasFunct, HasCancelFunct, HasC
 where
     F: 'static + FnOnce(Ctx) -> Result<(), E> + Send,
     Ctx: 'static + Send,
-    E: 'static + Send,
+    E: 'static + Send + std::fmt::Debug,
     CF: 'static + Send + FnOnce() -> Fut2,
     Fut2: Send + std::future::Future<Output = ()>,
 {
