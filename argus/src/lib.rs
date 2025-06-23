@@ -127,9 +127,9 @@ pub fn setup_tracing(args: &TracingOptions) -> WorkerGuard {
     Registry::default()
         // tracy needs to go first - otherwise it somehow inherits with_ansi(true) and that shows weird
         // in the Tracy profiler
-        //.with(tracy)
+        .with(tracy)
         .with(base_layer)
-        //.with(tracing_error::ErrorLayer::default())
+        .with(tracing_error::ErrorLayer::default())
         .init();
 
     guard
