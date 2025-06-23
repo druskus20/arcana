@@ -172,7 +172,6 @@ impl GladosHandle {
                     .then(|_| async move {
                         debug!("Running cancellation function for {}", name);
                         f_cancel().await;
-                        std::process::exit(1);
                     })
                     .await;
             }
@@ -280,7 +279,7 @@ async fn glados_loop(
                 })?;
             }
             Some(ToGladosMsg::RemoveTask(task)) => {
-                debug!("Removing task: {}", task);
+                debug!("Removing task with id: {}", task);
                 // Find and remove the task in one step
                 let task_position = glados
                     .active_tasks

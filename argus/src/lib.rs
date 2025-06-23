@@ -1,6 +1,7 @@
-use std::path::PathBuf;
+use std::{ffi::os_str::Display, path::PathBuf};
 
 use tracing::Level;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     EnvFilter, Layer as _, Registry,
     fmt::{self, format::FmtSpan, writer::BoxMakeWriter},
@@ -33,6 +34,16 @@ pub enum Output {
     File(PathBuf),
 }
 
+impl std::fmt::Display for Output {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Output::Stdout => write!(f, "stdout"),
+            Output::Stderr => write!(f, "stderr"),
+            Output::File(path) => write!(f, "{}", path.display()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TracingOptions {
     // Tracy
@@ -63,21 +74,21 @@ impl Default for TracingOptions {
     }
 }
 
-pub fn setup_tracing(args: &TracingOptions) {
-    let base_layer = {
-        let writer = match args.output.clone() {
-            Output::Stdout => BoxMakeWriter::new(std::io::stdout),
-            Output::Stderr => BoxMakeWriter::new(std::io::stderr),
-            Output::File(path) => {
-                let file = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(path)
-                    .expect("Failed to open log file");
-                BoxMakeWriter::new(file)
-            }
-        };
+pub fn setup_tracing(args: &TracingOptions) -> WorkerGuard {
+    let (writer, guard) = match args.output.clone() {
+        Output::Stdout => tracing_appender::non_blocking(std::io::stdout()),
+        Output::Stderr => tracing_appender::non_blocking(std::io::stderr()),
+        Output::File(path) => {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .expect("Failed to open log file");
+            tracing_appender::non_blocking(file)
+        }
+    };
 
+    let base_layer = {
         let span_events = if args.enter_span_events {
             FmtSpan::FULL
         } else {
@@ -116,8 +127,10 @@ pub fn setup_tracing(args: &TracingOptions) {
     Registry::default()
         // tracy needs to go first - otherwise it somehow inherits with_ansi(true) and that shows weird
         // in the Tracy profiler
-        .with(tracy)
+        //.with(tracy)
         .with(base_layer)
-        .with(tracing_error::ErrorLayer::default())
+        //.with(tracing_error::ErrorLayer::default())
         .init();
+
+    guard
 }
