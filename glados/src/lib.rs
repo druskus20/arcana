@@ -6,7 +6,7 @@ use tokio::sync::{
     oneshot::Sender as OneShotSender,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 mod task;

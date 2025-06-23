@@ -21,11 +21,11 @@ pub enum TaskError {
 #[derive(Debug, Error)]
 pub enum JoinHandleError {
     #[error("Failed to join tokio task: {0}")]
-    TokioJoinError(#[from] tokio::task::JoinError),
+    TokioJoin(#[from] tokio::task::JoinError),
     #[error("Opaque OS thread join error")]
-    OSThreadJoinError(Box<dyn std::any::Any + Send>),
+    OSThreadJoin(Box<dyn std::any::Any + Send>),
     #[error("Failed to receive result from OS thread join")]
-    OneShotRecvError(#[from] tokio::sync::oneshot::error::RecvError),
+    OneShotRecv(#[from] tokio::sync::oneshot::error::RecvError),
 }
 
 #[derive(Debug)]
@@ -98,17 +98,13 @@ pub enum JoinHandle {
 impl JoinHandle {
     pub async fn try_join(self: JoinHandle) -> Result<Result<(), TaskError>, JoinHandleError> {
         match self {
-            JoinHandle::Tokio(join_handle) => {
-                join_handle.await.map_err(JoinHandleError::TokioJoinError)
-            }
+            JoinHandle::Tokio(join_handle) => join_handle.await.map_err(JoinHandleError::TokioJoin),
             // Start a thread, join the handle, send the result through a tokio oneshot channel
             // The thread should be aborted if it takes to long to join
             JoinHandle::OSThread(join_handle) => {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 std::thread::spawn(move || {
-                    let r = join_handle
-                        .join()
-                        .map_err(|e| JoinHandleError::OSThreadJoinError(e));
+                    let r = join_handle.join().map_err(JoinHandleError::OSThreadJoin);
                     tx.send(r).expect("Failed to send result");
                 });
                 rx.await?
