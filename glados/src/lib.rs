@@ -179,29 +179,32 @@ impl GladosHandle {
 
         // Spawn the task - which starts executing immediately, but will be paused until Glados
         // notifies it to start
-        let join_handle = std::thread::spawn({
-            let to_glados = self.to_glados.clone();
-            move || {
-                let uuid = notify_ready_to_start_receiver.blocking_recv()?;
-                let uuid = match uuid {
-                    Ok(uuid) => uuid,
-                    Err(e) => match e {
-                        // TODO: probably remove the task
-                        AddTaskError::ShutdownInProgress => todo!(),
-                    },
-                };
-                notify_ready_to_cancel.send(()).unwrap();
+        let join_handle = std::thread::Builder::new()
+            .name(name.to_owned())
+            .spawn({
+                let to_glados = self.to_glados.clone();
+                move || {
+                    let uuid = notify_ready_to_start_receiver.blocking_recv()?;
+                    let uuid = match uuid {
+                        Ok(uuid) => uuid,
+                        Err(e) => match e {
+                            // TODO: probably remove the task
+                            AddTaskError::ShutdownInProgress => todo!(),
+                        },
+                    };
+                    notify_ready_to_cancel.send(()).unwrap();
 
-                let r = f(ctx).map_err(|e| TaskError::TaskFailed(Box::new(e)));
-                match r {
-                    Ok(_) => debug!("Task {} finished successfully", uuid),
-                    Err(e) => error!("Task {} finished with error: {:?}", uuid, e),
+                    let r = f(ctx).map_err(|e| TaskError::TaskFailed(Box::new(e)));
+                    match r {
+                        Ok(_) => debug!("Task {} finished successfully", uuid),
+                        Err(e) => error!("Task {} finished with error: {:?}", uuid, e),
+                    }
+
+                    to_glados.try_send(ToGladosMsg::RemoveTask(uuid))?;
+                    Ok(())
                 }
-
-                to_glados.try_send(ToGladosMsg::RemoveTask(uuid))?;
-                Ok(())
-            }
-        });
+            })
+            .unwrap();
 
         let task_handle =
             TaskHandle::new(name, JoinHandle::OSThread(join_handle), cancellation_token);

@@ -10,6 +10,9 @@ tracing-tracy = { path = "/home/drusk/thesis/rust_tracy_client/tracing-tracy" }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0.12"
+
 
 [features]
 tracy-profiler = ["tracing-tracy/demangle"]
