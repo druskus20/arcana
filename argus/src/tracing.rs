@@ -102,6 +102,8 @@ pub fn setup_tracing(args: &TracingOptions) -> WorkerGuard {
     };
 
     let tracy = if args.tracy_layer {
+        #[cfg(not(feature = "tracy-profiler"))]
+        panic!("tracy-profiler feature is not enabled, but tracy_layer is set to true");
         Some(TracyLayer::default())
     } else {
         None
