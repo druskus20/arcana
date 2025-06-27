@@ -22,11 +22,7 @@
 //
 //    `Instant` in Rust uses libc::CLOCK_MONOTONIC
 //    See: https://doc.rust-lang.org/nightly/src/std/sys/pal/unix/time.rs.html
-use std::{
-    any::type_name,
-    collections::{HashMap, HashSet},
-    time::Instant,
-};
+use std::{any::type_name, collections::HashMap, time::Instant};
 use triple_buffer::Output;
 use vdso::Vdso;
 
@@ -73,19 +69,28 @@ pub struct RtStoreReader<const COUNT: usize, Collection: MetricCollection<COUNT>
 //    }
 //}
 
-const MAX_TAGS: usize = 10;
+//const MAX_TAGS: usize = 10;
 #[derive(Debug, Clone, Copy)]
 pub struct RtMetric {
     pub name: &'static str,
-    pub tags: [&'static str; MAX_TAGS],
     pub value: RtMetricValue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MetricKind {
+    Message,
+    Counter,
+    Gauge,
+    TimeSeries,
+    Instant,
 }
 
 // TODO: Validate at compile time
 // TODO: add some way to skip that validation for dynamic tags and names
 impl RtMetric {
-    pub fn new(name: &'static str, tags: [&'static str; MAX_TAGS], value: RtMetricValue) -> Self {
-        Self { name, value, tags }
+    pub fn default_with_name(name: &'static str, kind: MetricKind) -> Self {
+        let value = RtMetricValue::default_with_kind(kind);
+        Self { name, value }
     }
 
     pub fn reset_value(&mut self) {
@@ -96,7 +101,7 @@ impl RtMetric {
 #[derive(Debug, Clone)]
 pub struct Metric {
     pub name: String,
-    pub tags: HashSet<String>,
+    //pub tags: HashSet<String>,
     pub value: MetricValue,
 }
 
@@ -115,13 +120,36 @@ pub enum RtMetricValue {
     TimeSeries {
         values: [f32; MAX_TS_VALUES],
         n_values: usize,
-        start_instant: Instant,
+        start_instant: Option<Instant>,
         end_instant: Option<Instant>,
     },
     Instant(Option<Instant>),
 }
 
 impl RtMetricValue {
+    pub fn default_with_kind(kind: MetricKind) -> Self {
+        match kind {
+            MetricKind::Message => RtMetricValue::Message(""),
+            MetricKind::Counter => RtMetricValue::Counter(0.0),
+            MetricKind::Gauge => RtMetricValue::Gauge(0.0),
+            MetricKind::TimeSeries => RtMetricValue::TimeSeries {
+                values: [0.0; MAX_TS_VALUES],
+                n_values: 0,
+                start_instant: None,
+                end_instant: None,
+            },
+            MetricKind::Instant => RtMetricValue::Instant(None),
+        }
+    }
+    pub fn kind(&self) -> MetricKind {
+        match self {
+            RtMetricValue::Message(_) => MetricKind::Message,
+            RtMetricValue::Counter(_) => MetricKind::Counter,
+            RtMetricValue::Gauge(_) => MetricKind::Gauge,
+            RtMetricValue::TimeSeries { .. } => MetricKind::TimeSeries,
+            RtMetricValue::Instant(_) => MetricKind::Instant,
+        }
+    }
     pub fn reset(&mut self) {
         match self {
             RtMetricValue::Message(_) => *self = RtMetricValue::Message(""),
@@ -135,25 +163,10 @@ impl RtMetricValue {
             } => {
                 *values = [0.0; MAX_TS_VALUES];
                 *n_values = 0;
-                *start_instant = Instant::now();
+                *start_instant = None;
                 *end_instant = None;
             }
             RtMetricValue::Instant(_) => *self = RtMetricValue::Instant(None),
-        }
-    }
-
-    pub fn is_timeseries(&self) -> bool {
-        matches!(self, RtMetricValue::TimeSeries { .. })
-    }
-
-    fn update_ts_end_instant(&mut self) {
-        assert_eq!(
-            self.is_timeseries(),
-            true,
-            "This method can only be called on a timeseries metric"
-        );
-        if let RtMetricValue::TimeSeries { end_instant, .. } = self {
-            *end_instant = Some(Instant::now());
         }
     }
 }
@@ -170,9 +183,9 @@ pub enum MetricValue {
     TimeSeries {
         values: Vec<f32>,
         start_instant: Instant,
-        end_instant: Option<Instant>,
+        end_instant: Instant,
     },
-    Timestamp(chrono::DateTime<chrono::Utc>),
+    Instant(Instant),
 }
 
 impl From<&RtMetricValue> for MetricValue {
@@ -188,10 +201,14 @@ impl From<&RtMetricValue> for MetricValue {
                 end_instant,
             } => MetricValue::TimeSeries {
                 values: values[..*n_values].to_vec(),
-                start_instant: *start_instant,
-                end_instant: *end_instant,
+                start_instant: start_instant
+                    .expect("Timeseries start instant should not be None at this point"),
+                end_instant: end_instant
+                    .expect("Timeseries end instant should not be None at this point"),
             },
-            RtMetricValue::Instant(ts) => MetricValue::Timestamp(chrono::Utc::now()), // TODO: use a proper timestamp
+            RtMetricValue::Instant(ts) => {
+                MetricValue::Instant(ts.expect("Instant should not be None at this point"))
+            }
         }
     }
 }
@@ -219,8 +236,6 @@ pub trait MetricCollection<const COUNT: usize>: Send {
 struct RtStore<const COUNT: usize, Collection: MetricCollection<COUNT>> {
     phantom: std::marker::PhantomData<Collection>,
     metrics: [RtMetric; COUNT],
-    // Keeps track of which metrics have been set
-    existing_metrics: [bool; COUNT],
 }
 
 fn is_vdso_clock_gettime_available() -> bool {
@@ -240,7 +255,7 @@ fn is_vdso_clock_gettime_available() -> bool {
 }
 
 impl<const COUNT: usize, C: MetricCollection<COUNT> + Clone> RtStore<COUNT, C> {
-    fn new() -> Self {
+    pub fn init(metrics_shape: [(&'static str, MetricKind); COUNT]) -> Self {
         if !is_vdso_clock_gettime_available() {
             panic!(
                 "vDSO clock_gettime not found, this is required for the realtime store to work 
@@ -248,26 +263,29 @@ impl<const COUNT: usize, C: MetricCollection<COUNT> + Clone> RtStore<COUNT, C> {
             );
         }
 
-        let mut metrics = [RtMetric {
-            name: "",
-            tags: [""; MAX_TAGS],
-            value: RtMetricValue::Message(""),
-        }; COUNT];
+        let metrics = {
+            let mut metrics = [RtMetric {
+                name: "",
+                value: RtMetricValue::Message(""),
+            }; COUNT];
 
-        for (i, metric) in metrics.iter_mut().enumerate() {
-            let name = C::get_name(i);
-            metric.name = name;
-        }
+            for (i, (name, kind)) in metrics_shape.iter().enumerate() {
+                metrics[i] = RtMetric::default_with_name(name, *kind);
+            }
+
+            metrics
+        };
 
         Self {
             metrics,
             phantom: std::marker::PhantomData,
-            existing_metrics: [false; COUNT],
         }
     }
 
-    pub fn split(capacity: usize) -> (RtStoreWriter<COUNT, C>, RtStoreReader<COUNT, C>) {
-        let (producer, consumer) = triple_buffer::triple_buffer(&RtStore::new());
+    pub fn split(
+        metrics_shape: [(&'static str, MetricKind); COUNT],
+    ) -> (RtStoreWriter<COUNT, C>, RtStoreReader<COUNT, C>) {
+        let (producer, consumer) = triple_buffer::triple_buffer(&RtStore::init(metrics_shape));
 
         (
             RtStoreWriter { store: producer },
@@ -276,10 +294,13 @@ impl<const COUNT: usize, C: MetricCollection<COUNT> + Clone> RtStore<COUNT, C> {
     }
 
     // This method should be called at the beginning of the real time loop. It resets the values of
-    // all metrics.
+    // all metrics and sets the start timestamp for time series metrics.
     pub fn enter(&mut self) {
         for metric in self.metrics.iter_mut() {
             metric.reset_value();
+            if let RtMetricValue::TimeSeries { start_instant, .. } = &mut metric.value {
+                start_instant.replace(Instant::now());
+            }
         }
     }
 
@@ -287,58 +308,112 @@ impl<const COUNT: usize, C: MetricCollection<COUNT> + Clone> RtStore<COUNT, C> {
     /// of the current batch of metrics.
     pub fn exit(&mut self) {
         for metric in self.metrics.iter_mut() {
-            if metric.value.is_timeseries() {
-                metric.value.update_ts_end_instant();
+            if let RtMetricValue::TimeSeries { end_instant, .. } = &mut metric.value {
+                end_instant.replace(Instant::now());
             }
         }
     }
 }
 
 impl<const COUNT: usize, C: MetricCollection<COUNT> + Clone> RtStoreWriter<COUNT, C> {
-    pub fn push_value(
+    pub fn push_value_to_ts(
         &mut self,
         metric_name: &'static str,
-        metric: RtMetricValue,
+        value: f32,
     ) -> Result<(), StoreError> {
         let buffer = self.store.input_buffer_mut();
-        let index = C::get_index(metric.name).ok_or(StoreError::MetricNotFound)?;
+        let index = C::get_index(metric_name).ok_or(StoreError::MetricNotFound)?;
 
-        if buffer.existing_metrics[index] {
-            // if it's a timeseries, we can push  a value to it
-            // check that both metric and the buffer metric are timeseries
-            if let RtMetricValue::TimeSeries { .. } = metric.value {
-                if let RtMetricValue::TimeSeries {
-                    values,
-                    n_values,
-                    ..
-                    //start_instant,
-                    //end_instant,
-                } = &buffer.metrics[index].value
-                {
-                    // check if the timeseries is full
-                    if *n_values >= MAX_TS_VALUES {
-                        return Err(StoreError::FullTimeSeries);
-                    }
-                    else {
-                    // push the value to the timeseries
-                        todo!();
-                    *n_values += 1;
-                    }
-                } else {
-                    return Err(StoreError::MetricTypeMismatch {
-                        expected: "TimeSeries".to_string(),
-                        found: format!("{:?}", buffer.metrics[index].value),
-                    });
-                }
-            } else {
-                return Err(StoreError::MetricAlreadyExists);
+        let metric = &mut buffer.metrics[index];
+        if let RtMetricValue::TimeSeries {
+            values, n_values, ..
+        } = &mut metric.value
+        {
+            if *n_values >= MAX_TS_VALUES {
+                return Err(StoreError::FullTimeSeries);
             }
-        }
-
-        buffer.metrics[index] = metric;
-        buffer.existing_metrics[index] = true;
+            values[*n_values] = value;
+            *n_values += 1;
+        } else {
+            return Err(StoreError::MetricTypeMismatch {
+                expected: "TimeSeries".to_string(),
+                found: type_name::<RtMetricValue>().to_string(),
+            });
+        };
 
         Ok(())
+    }
+
+    pub fn set_message(
+        &mut self,
+        metric_name: &'static str,
+        message: &'static str,
+    ) -> Result<(), StoreError> {
+        let buffer = self.store.input_buffer_mut();
+        let index = C::get_index(metric_name).ok_or(StoreError::MetricNotFound)?;
+
+        let metric = &mut buffer.metrics[index];
+        if let RtMetricValue::Message(_) = &mut metric.value {
+            metric.value = RtMetricValue::Message(message);
+            Ok(())
+        } else {
+            Err(StoreError::MetricTypeMismatch {
+                expected: "Message".to_string(),
+                found: type_name::<RtMetricValue>().to_string(),
+            })
+        }
+    }
+
+    pub fn set_counter(&mut self, metric_name: &'static str, value: f32) -> Result<(), StoreError> {
+        let buffer = self.store.input_buffer_mut();
+        let index = C::get_index(metric_name).ok_or(StoreError::MetricNotFound)?;
+
+        let metric = &mut buffer.metrics[index];
+        if let RtMetricValue::Counter(_) = &mut metric.value {
+            metric.value = RtMetricValue::Counter(value);
+            Ok(())
+        } else {
+            Err(StoreError::MetricTypeMismatch {
+                expected: "Counter".to_string(),
+                found: type_name::<RtMetricValue>().to_string(),
+            })
+        }
+    }
+
+    pub fn set_gauge(&mut self, metric_name: &'static str, value: f32) -> Result<(), StoreError> {
+        let buffer = self.store.input_buffer_mut();
+        let index = C::get_index(metric_name).ok_or(StoreError::MetricNotFound)?;
+
+        let metric = &mut buffer.metrics[index];
+        if let RtMetricValue::Gauge(_) = &mut metric.value {
+            metric.value = RtMetricValue::Gauge(value);
+            Ok(())
+        } else {
+            Err(StoreError::MetricTypeMismatch {
+                expected: "Gauge".to_string(),
+                found: type_name::<RtMetricValue>().to_string(),
+            })
+        }
+    }
+
+    pub fn set_instant(
+        &mut self,
+        metric_name: &'static str,
+        instant: Instant,
+    ) -> Result<(), StoreError> {
+        let buffer = self.store.input_buffer_mut();
+        let index = C::get_index(metric_name).ok_or(StoreError::MetricNotFound)?;
+
+        let metric = &mut buffer.metrics[index];
+        if let RtMetricValue::Instant(_) = &mut metric.value {
+            metric.value = RtMetricValue::Instant(Some(instant));
+            Ok(())
+        } else {
+            Err(StoreError::MetricTypeMismatch {
+                expected: "Instant".to_string(),
+                found: type_name::<RtMetricValue>().to_string(),
+            })
+        }
     }
 
     /// This method should be called at the beginning of the real time loop. It resets the values of
@@ -380,10 +455,10 @@ impl<const COUNT: usize, C: MetricCollection<COUNT>> From<&RtStore<COUNT, C>> fo
                 // allocate name
                 let name = rt_metric.name.to_string();
                 // allocate tags
-                let tags = rt_metric.tags.iter().map(|tag| tag.to_string()).collect();
+                //let tags = rt_metric.tags.iter().map(|tag| tag.to_string()).collect();
                 // allocate value
                 let value = MetricValue::from(&rt_metric.value);
-                (name.clone(), Metric { name, tags, value })
+                (name.clone(), Metric { name, value })
             })
             .collect();
 
@@ -433,37 +508,37 @@ impl MetricFilter for NameFilter {
     }
 }
 
-pub struct TagFilter {
-    tags: HashSet<String>,
-    mode: TagFilterMode,
-}
-
-impl TagFilter {
-    pub fn any_of(tags: HashSet<String>) -> Self {
-        TagFilter {
-            tags,
-            mode: TagFilterMode::Any,
-        }
-    }
-
-    pub fn all_of(tags: HashSet<String>) -> Self {
-        TagFilter {
-            tags,
-            mode: TagFilterMode::All,
-        }
-    }
-}
-
-pub enum TagFilterMode {
-    All,
-    Any,
-}
-
-impl MetricFilter for TagFilter {
-    fn matches(&self, metric: &Metric) -> bool {
-        match self.mode {
-            TagFilterMode::All => self.tags.is_subset(&metric.tags),
-            TagFilterMode::Any => self.tags.is_disjoint(&metric.tags),
-        }
-    }
-}
+//pub struct TagFilter {
+//    tags: HashSet<String>,
+//    mode: TagFilterMode,
+//}
+//
+//impl TagFilter {
+//    pub fn any_of(tags: HashSet<String>) -> Self {
+//        TagFilter {
+//            tags,
+//            mode: TagFilterMode::Any,
+//        }
+//    }
+//
+//    pub fn all_of(tags: HashSet<String>) -> Self {
+//        TagFilter {
+//            tags,
+//            mode: TagFilterMode::All,
+//        }
+//    }
+//}
+//
+//pub enum TagFilterMode {
+//    All,
+//    Any,
+//}
+//
+//impl MetricFilter for TagFilter {
+//    fn matches(&self, metric: &Metric) -> bool {
+//        match self.mode {
+//            TagFilterMode::All => self.tags.is_subset(&metric.tags),
+//            TagFilterMode::Any => self.tags.is_disjoint(&metric.tags),
+//        }
+//    }
+//}
