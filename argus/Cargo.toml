@@ -12,7 +12,9 @@ tracing-appender = "0.2"
 
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0.12"
-
+triple_buffer = "8.1.1"
+fchashmap = "0.1.3"
+vdso = "0.2.2"
 
 [features]
 tracy-profiler = ["tracing-tracy/demangle"]
