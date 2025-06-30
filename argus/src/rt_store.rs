@@ -153,7 +153,7 @@ impl RtMetricValue {
     pub fn reset(&mut self) {
         match self {
             RtMetricValue::Message(_) => *self = RtMetricValue::Message(""),
-            RtMetricValue::Counter(_) => *self = RtMetricValue::Counter(0.0),
+            RtMetricValue::Counter(v) => *self = RtMetricValue::Counter(*v),
             RtMetricValue::Gauge(_) => *self = RtMetricValue::Gauge(0.0),
             RtMetricValue::TimeSeries {
                 values,
@@ -227,15 +227,22 @@ pub enum StoreError {
     FullTimeSeries,
 }
 
-pub trait MetricCollection<const COUNT: usize>: Send {
+pub trait MetricCollection: Send {
+    const COUNT: usize;
     fn get_index(name: &str) -> Option<usize>;
     fn get_name(index: usize) -> &'static str;
+    fn shape() -> &'static [(&'static str, MetricKind)];
 }
 
 #[derive(Debug, Clone)]
-struct RtStore<const COUNT: usize, Collection: MetricCollection<COUNT>> {
+pub struct RtStore<Collection: MetricCollection> {
     phantom: std::marker::PhantomData<Collection>,
-    metrics: [RtMetric; COUNT],
+    metrics: &'static [RtMetric],
+}
+
+#[derive(Debug, Clone)]
+pub struct RtStoreTest<Array: MetricCollection> {
+    metrics: Array,
 }
 
 fn is_vdso_clock_gettime_available() -> bool {
@@ -254,8 +261,8 @@ fn is_vdso_clock_gettime_available() -> bool {
         .is_some();
 }
 
-impl<const COUNT: usize, C: MetricCollection<COUNT> + Clone> RtStore<COUNT, C> {
-    pub fn init(metrics_shape: [(&'static str, MetricKind); COUNT]) -> Self {
+impl<C: MetricCollection + Clone> RtStore<C> {
+    pub fn init() -> Self {
         if !is_vdso_clock_gettime_available() {
             panic!(
                 "vDSO clock_gettime not found, this is required for the realtime store to work 
@@ -263,29 +270,14 @@ impl<const COUNT: usize, C: MetricCollection<COUNT> + Clone> RtStore<COUNT, C> {
             );
         }
 
-        let metrics = {
-            let mut metrics = [RtMetric {
-                name: "",
-                value: RtMetricValue::Message(""),
-            }; COUNT];
-
-            for (i, (name, kind)) in metrics_shape.iter().enumerate() {
-                metrics[i] = RtMetric::default_with_name(name, *kind);
-            }
-
-            metrics
-        };
-
         Self {
-            metrics,
+            metrics: todo(),
             phantom: std::marker::PhantomData,
         }
     }
 
-    pub fn split(
-        metrics_shape: [(&'static str, MetricKind); COUNT],
-    ) -> (RtStoreWriter<COUNT, C>, RtStoreReader<COUNT, C>) {
-        let (producer, consumer) = triple_buffer::triple_buffer(&RtStore::init(metrics_shape));
+    pub fn split(self) -> (RtStoreWriter<C>, RtStoreReader<C>) {
+        let (producer, consumer) = triple_buffer::triple_buffer(self.metrics);
 
         (
             RtStoreWriter { store: producer },
@@ -295,7 +287,7 @@ impl<const COUNT: usize, C: MetricCollection<COUNT> + Clone> RtStore<COUNT, C> {
 
     // This method should be called at the beginning of the real time loop. It resets the values of
     // all metrics and sets the start timestamp for time series metrics.
-    pub fn enter(&mut self) {
+    pub fn reset_values(&mut self) {
         for metric in self.metrics.iter_mut() {
             metric.reset_value();
             if let RtMetricValue::TimeSeries { start_instant, .. } = &mut metric.value {
@@ -306,7 +298,7 @@ impl<const COUNT: usize, C: MetricCollection<COUNT> + Clone> RtStore<COUNT, C> {
 
     /// This method should be called at the end of the real time loop. It updates the end timestamp
     /// of the current batch of metrics.
-    pub fn exit(&mut self) {
+    pub fn end_timeseries(&mut self) {
         for metric in self.metrics.iter_mut() {
             if let RtMetricValue::TimeSeries { end_instant, .. } = &mut metric.value {
                 end_instant.replace(Instant::now());
@@ -418,16 +410,16 @@ impl<const COUNT: usize, C: MetricCollection<COUNT> + Clone> RtStoreWriter<COUNT
 
     /// This method should be called at the beginning of the real time loop. It resets the values of
     ///
-    pub fn enter(&mut self) {
+    pub fn enter_reset(&mut self) {
         let buffer = self.store.input_buffer_mut();
-        buffer.enter();
+        buffer.reset_values();
     }
 
     /// This method should be called at the end of the real time loop. It updates the end timestamp
     /// of the current batch of metrics. And then publishes the buffer to the reader.
-    pub fn exit(&mut self) {
+    pub fn exit_finish(&mut self) {
         let buffer = self.store.input_buffer_mut();
-        buffer.exit();
+        buffer.end_timeseries();
         let _has_buffer_been_overwritten = self.store.publish();
     }
 }
