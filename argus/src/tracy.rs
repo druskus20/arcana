@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! plot_with_name {
     ($plot_name:expr, $value:expr) => {{
-        $crate::Client::running()
+        tracing::client::Client::running()
             .expect("plot_const! without a running Client")
             .plot($plot_name, $value)
     }};

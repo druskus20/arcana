@@ -37,11 +37,22 @@ impl TimeSeries {
         self.n_values += 1;
         Ok(())
     }
+
+    fn len(&self) -> usize {
+        self.n_values
+    }
+
+    fn values(&self) -> &[f32] {
+        &self.values
+    }
 }
 
 impl Message {
     pub fn set(&mut self, message: &'static str) {
         *self = Self(message);
+    }
+    pub fn value(&self) -> &str {
+        self.0
     }
 }
 
@@ -49,11 +60,19 @@ impl Counter {
     pub fn add(&mut self, value: f32) {
         self.0 += value;
     }
+
+    pub fn value(&self) -> f32 {
+        self.0
+    }
 }
 
 impl Gauge {
     pub fn set(&mut self, value: f32) {
         self.0 = value;
+    }
+
+    pub fn value(&self) -> f32 {
+        self.0
     }
 }
 
@@ -68,6 +87,10 @@ impl Instant {
 
     pub fn is_set(&self) -> bool {
         self.0.is_some()
+    }
+
+    pub fn value(&self) -> Option<std::time::Instant> {
+        self.0
     }
 }
 

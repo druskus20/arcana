@@ -31,9 +31,10 @@ pub mod metrics;
 
 #[derive(Debug, Clone)]
 pub struct RtStore<M> {
-    metrics: M,
-    start_instant: Option<std::time::Instant>,
-    end_instant: Option<std::time::Instant>,
+    pub initialized: bool,
+    pub metrics: M,
+    pub start_instant: Option<std::time::Instant>,
+    pub end_instant: Option<std::time::Instant>,
 }
 
 #[derive(Debug)]
@@ -44,14 +45,9 @@ pub struct RtStoreWriter<M: Send> {
 #[derive(Debug)]
 pub struct StoreReader<M: Send> {
     store: Output<RtStore<M>>,
+    // Trick to detect if the store has been read already this iteration
+    last_read_start_instant: Option<std::time::Instant>,
 }
-
-//const MAX_TAGS: usize = 10;
-//#[derive(Debug, Clone, Copy)]
-//pub struct RtMetric {
-//    pub name: &'static str,
-//    pub value: RtMetricValue,
-//}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MetricKind {
@@ -89,14 +85,12 @@ pub enum MetricValue {
 pub enum StoreError {
     #[error("Failed to acquire lock on store")]
     LockError,
-    #[error("Metric with the same name already exists, and it's not a timeseries")]
-    MetricAlreadyExists,
-    #[error("Metric not found")]
-    MetricNotFound,
-    #[error("Metric type mismatch, expected: {expected}, found: {found}")]
-    MetricTypeMismatch { expected: String, found: String },
     #[error("Full timeseries, cannot push more values")]
     FullTimeSeries,
+    #[error("Store has not been initialized yet")]
+    StoreNotInitialized,
+    #[error("Store has been already read")]
+    StoreAlreadyRead,
 }
 
 pub trait MetricCollection
@@ -104,9 +98,6 @@ where
     Self: Sized,
 {
     fn iter_mut(&mut self) -> impl Iterator<Item = RtMetric>;
-    fn into_snapshot(self) -> StoreSnapshot {
-        todo!()
-    }
 }
 
 fn is_vdso_clock_gettime_available() -> bool {
@@ -135,6 +126,7 @@ impl<M: MetricCollection + Clone + Send + Default> RtStore<M> {
         }
 
         Self {
+            initialized: false,
             metrics: M::default(),
             start_instant: None,
             end_instant: None,
@@ -146,13 +138,17 @@ impl<M: MetricCollection + Clone + Send + Default> RtStore<M> {
 
         (
             RtStoreWriter { store: producer },
-            StoreReader { store: consumer },
+            StoreReader {
+                store: consumer,
+                last_read_start_instant: None,
+            },
         )
     }
 }
 
 impl<M: MetricCollection> RtStore<M> {
     pub fn reset(&mut self) {
+        self.initialized = false;
         self.start_instant = None;
         self.end_instant = None;
         for mut metric in self.metrics.iter_mut() {
@@ -168,6 +164,7 @@ impl<M: MetricCollection> RtStore<M> {
     /// of the current batch of metrics.
     pub fn exit(&mut self) {
         self.end_instant = Some(std::time::Instant::now());
+        self.initialized = true;
     }
 }
 
@@ -177,7 +174,6 @@ impl<M: MetricCollection + Send> RtStoreWriter<M> {
     }
 
     /// This method should be called at the beginning of the real time loop. It resets the values of
-    ///
     pub fn reset_and_enter(&mut self) {
         let buffer = self.store.input_buffer_mut();
         buffer.reset();
@@ -194,84 +190,17 @@ impl<M: MetricCollection + Send> RtStoreWriter<M> {
 }
 
 impl<M: MetricCollection + Send + Clone> StoreReader<M> {
-    pub fn read_snapshot(&mut self) -> StoreSnapshot {
-        let rt_store = self.store.read();
-        StoreSnapshot::from(rt_store)
-    }
-}
-
-impl<M> From<&RtStore<M>> for StoreSnapshot
-where
-    M: MetricCollection + Clone,
-{
-    fn from(value: &RtStore<M>) -> Self {
-        value.metrics.clone().into_snapshot()
-    }
-}
-
-/// Non realtime safe version of the store, which is implemented with heap allocated types for
-/// better ergonomics
-#[derive(Debug, Clone)]
-pub struct StoreSnapshot {
-    metrics: HashMap<String, Metric>,
-}
-
-//impl<M: MetricCollection> From<&RtStore<M>> for StoreSnapshot {
-//    fn from(value: &RtStore<M>) -> Self {
-//        let metrics = value
-//            .metrics
-//            .clone_into_iter()
-//            .map(|rt_metric| {
-//                // allocate name
-//                let name = rt_metric.name.to_string();
-//                // allocate value
-//                let value = MetricValue::from(&rt_metric.value);
-//                (name.clone(), Metric { name, value })
-//            })
-//            .collect();
-//
-//        StoreSnapshot { metrics }
-//    }
-//}
-
-impl StoreSnapshot {
-    pub fn query_by_name(&self, name: &str) -> Result<Metric, StoreError> {
-        self.metrics
-            .get(name)
-            .ok_or(StoreError::MetricNotFound)
-            .cloned()
-    }
-
-    /// Retrieves a snapshot of the store
-    pub fn query_with_filter(
-        &self,
-        filter: impl MetricFilter,
-    ) -> Result<HashMap<String, Metric>, StoreError> {
-        let r = self
-            .metrics
-            .iter()
-            .filter_map(|(name, metric)| {
-                if filter.matches(metric) {
-                    Some((name.clone(), metric.clone()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        Ok(r)
-    }
-}
-pub trait MetricFilter {
-    fn matches(&self, metric: &Metric) -> bool;
-}
-
-pub struct NameFilter {
-    name: String,
-}
-
-impl MetricFilter for NameFilter {
-    fn matches(&self, metric: &Metric) -> bool {
-        metric.name == self.name
+    pub fn read(&mut self) -> Result<&RtStore<M>, StoreError> {
+        let store = self.store.read();
+        if !store.initialized {
+            Err(StoreError::StoreNotInitialized)
+        } else if self.last_read_start_instant.is_some()
+            && self.last_read_start_instant == store.start_instant
+        {
+            Err(StoreError::StoreAlreadyRead)
+        } else {
+            self.last_read_start_instant = store.start_instant;
+            Ok(store)
+        }
     }
 }
