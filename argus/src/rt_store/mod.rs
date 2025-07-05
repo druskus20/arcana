@@ -182,7 +182,7 @@ impl<M: MetricCollection + Send> RtStoreWriter<M> {
 
     /// This method should be called at the end of the real time loop. It updates the end timestamp
     /// of the current batch of metrics. And then publishes the buffer to the reader.
-    pub fn exit(&mut self) {
+    pub fn exit_and_publish(&mut self) {
         let buffer = self.store.input_buffer_mut();
         buffer.exit();
         let _has_buffer_been_overwritten = self.store.publish();

@@ -3,4 +3,11 @@ name = "spells"
 version = "0.1.0"
 edition = "2024"
 
+
+[features]
+ctrl_c = ["tokio-util", "ctrlc"]
+
 [dependencies]
+
+tokio-util = { version = "0.7", optional = true }
+ctrlc = { version = "3.4", optional = true }
