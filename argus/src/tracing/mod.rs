@@ -10,6 +10,9 @@ use tracing_subscriber::{
 };
 use tracing_tracy::TracyLayer;
 
+#[cfg(feature = "occulus")]
+pub mod occulus;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
     Stdout,
@@ -32,6 +35,9 @@ pub struct TracingOptions {
     // Tracy
     pub tracy_layer: bool,
 
+    // Occulus (custom dashboard)
+    pub oculus_layer: bool,
+
     // Base
     pub output: Output,
     pub log_level: Level,
@@ -47,6 +53,7 @@ impl Default for TracingOptions {
         Self {
             output: Output::Stdout,
             tracy_layer: false,
+            oculus_layer: false,
             log_level: Level::WARN,
             lines: false,
             file: false,
