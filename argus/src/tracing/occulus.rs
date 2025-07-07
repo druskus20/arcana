@@ -16,8 +16,8 @@ pub struct DashboardTcpLayer {
     sender: UnboundedSender<DashboardEvent>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-struct DashboardEvent {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DashboardEvent {
     #[serde(rename = "type")]
     event_type: String,
     timestamp: u64,

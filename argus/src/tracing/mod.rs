@@ -38,6 +38,9 @@ pub struct TracingOptions {
     // Occulus (custom dashboard)
     pub oculus_layer: bool,
 
+    // Error layer
+    pub error_layer: bool,
+
     // Base
     pub output: Output,
     pub log_level: Level,
@@ -54,6 +57,7 @@ impl Default for TracingOptions {
             output: Output::Stdout,
             tracy_layer: false,
             oculus_layer: false,
+            error_layer: true,
             log_level: Level::WARN,
             lines: false,
             file: false,
@@ -116,12 +120,18 @@ pub fn setup_tracing(args: &TracingOptions) -> WorkerGuard {
         None
     };
 
+    let error = if args.error_layer {
+        Some(tracing_error::ErrorLayer::default())
+    } else {
+        None
+    };
+
     Registry::default()
         // tracy needs to go first - otherwise it somehow inherits with_ansi(true) and that shows weird
         // in the Tracy profiler
         .with(tracy)
         .with(base_layer)
-        .with(tracing_error::ErrorLayer::default())
+        .with(error)
         .init();
 
     guard
