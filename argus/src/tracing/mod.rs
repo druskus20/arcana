@@ -36,7 +36,7 @@ pub struct TracingOptions {
     pub tracy_layer: bool,
 
     // Occulus (custom dashboard)
-    pub oculus_layer: bool,
+    pub occulus_layer: bool,
 
     // Error layer
     pub error_layer: bool,
@@ -56,7 +56,7 @@ impl Default for TracingOptions {
         Self {
             output: Output::Stdout,
             tracy_layer: false,
-            oculus_layer: false,
+            occulus_layer: false,
             error_layer: true,
             log_level: Level::WARN,
             lines: false,
@@ -126,6 +126,34 @@ pub fn setup_tracing(args: &TracingOptions) -> WorkerGuard {
         None
     };
 
+    let occulus = {
+        #[cfg(feature = "occulus")]
+        if args.occulus_layer {
+            Some(occulus::DashboardTcpLayer::new(
+                "127.0.0.1:8080".to_string(),
+            ))
+        } else {
+            None
+        }
+        #[cfg(not(feature = "occulus"))]
+        if args.occulus_layer {
+            panic!("occulus feature is not enabled, but oculus_layer is set to true");
+        } else {
+            Option::<()>::None
+        }
+    };
+
+    #[cfg(feature = "occulus")]
+    Registry::default()
+        // tracy needs to go first - otherwise it somehow inherits with_ansi(true) and that shows weird
+        // in the Tracy profiler
+        .with(tracy)
+        .with(base_layer)
+        .with(error)
+        .with(occulus)
+        .init();
+
+    #[cfg(not(feature = "occulus"))]
     Registry::default()
         // tracy needs to go first - otherwise it somehow inherits with_ansi(true) and that shows weird
         // in the Tracy profiler

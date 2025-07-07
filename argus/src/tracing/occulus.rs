@@ -32,12 +32,9 @@ pub struct DashboardEvent {
 }
 
 impl DashboardTcpLayer {
-    pub async fn new(
-        remote_addr: String,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(remote_addr: String) -> Self {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<DashboardEvent>();
 
-        // Spawn background task for TCP connection management
         tokio::spawn(async move {
             let mut connection_attempts = 0;
 
@@ -47,23 +44,6 @@ impl DashboardTcpLayer {
                         println!("Connected to dashboard at {}", remote_addr);
                         connection_attempts = 0;
 
-                        // Send initial handshake
-                        let handshake = json!({
-                            "type": "handshake",
-                            "version": "1.0",
-                            "app_name": env!("CARGO_PKG_NAME"),
-                            "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis()
-                        });
-
-                        if let Err(e) = stream
-                            .write_all(format!("{}\n", handshake).as_bytes())
-                            .await
-                        {
-                            eprintln!("Failed to send handshake: {}", e);
-                            continue;
-                        }
-
-                        // Process events
                         while let Some(event) = receiver.recv().await {
                             let event_json = match serde_json::to_string(&event) {
                                 Ok(json) => json,
@@ -78,7 +58,7 @@ impl DashboardTcpLayer {
                                 .await
                             {
                                 eprintln!("Failed to write to dashboard TCP stream: {}", e);
-                                break; // Reconnect
+                                break;
                             }
                         }
                     }
@@ -88,16 +68,13 @@ impl DashboardTcpLayer {
                             "Failed to connect to dashboard (attempt {}): {}",
                             connection_attempts, e
                         );
-
-                        // Exponential backoff, max 30 seconds
-                        let delay = std::cmp::min(2_u64.pow(connection_attempts.min(4)), 30);
-                        tokio::time::sleep(tokio::time::Duration::from_secs(delay)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
                     }
                 }
             }
         });
 
-        Ok(Self { sender })
+        Self { sender }
     }
 }
 
