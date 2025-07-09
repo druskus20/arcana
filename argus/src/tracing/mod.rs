@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use occulus::DashboardTcpLayerParams;
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
@@ -131,6 +132,7 @@ pub fn setup_tracing(args: &TracingOptions) -> WorkerGuard {
         if args.occulus_layer {
             Some(occulus::DashboardTcpLayer::new(
                 "127.0.0.1:8080".to_string(),
+                DashboardTcpLayerParams::default(),
             ))
         } else {
             None

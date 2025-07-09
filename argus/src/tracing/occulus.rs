@@ -14,25 +14,36 @@ use tracing_tracy::TracyLayer;
 // Dashboard TCP Layer - Tracy-style real-time logging
 pub struct DashboardTcpLayer {
     sender: UnboundedSender<DashboardEvent>,
+    params: DashboardTcpLayerParams,
+}
+
+pub struct DashboardTcpLayerParams {
+    pub span_events: bool,
+}
+
+impl Default for DashboardTcpLayerParams {
+    fn default() -> Self {
+        Self { span_events: false }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DashboardEvent {
     #[serde(rename = "type")]
-    event_type: String,
-    timestamp: u64,
-    level: String,
-    target: String,
-    message: String,
-    fields: HashMap<String, String>,
-    span_id: Option<u64>,
-    parent_span_id: Option<u64>,
-    file: Option<String>,
-    line: Option<u32>,
+    pub event_type: String,
+    pub timestamp: u64,
+    pub level: String,
+    pub target: String,
+    pub message: String,
+    pub fields: HashMap<String, String>,
+    pub span_id: Option<u64>,
+    pub parent_span_id: Option<u64>,
+    pub file: Option<String>,
+    pub line: Option<u32>,
 }
 
 impl DashboardTcpLayer {
-    pub fn new(remote_addr: String) -> Self {
+    pub fn new(remote_addr: String, params: DashboardTcpLayerParams) -> Self {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<DashboardEvent>();
 
         tokio::spawn(async move {
@@ -74,7 +85,7 @@ impl DashboardTcpLayer {
             }
         });
 
-        Self { sender }
+        Self { sender, params }
     }
 }
 
@@ -111,6 +122,9 @@ where
     }
 
     fn on_enter(&self, id: &span::Id, ctx: Context<'_, S>) {
+        if !self.params.span_events {
+            return;
+        }
         if let Some(span_ref) = ctx.span(id) {
             let dashboard_event = DashboardEvent {
                 event_type: "span_enter".to_string(),
@@ -133,6 +147,9 @@ where
     }
 
     fn on_exit(&self, id: &span::Id, ctx: Context<'_, S>) {
+        if !self.params.span_events {
+            return; // Skip exit events if not enabled
+        }
         if let Some(span_ref) = ctx.span(id) {
             let dashboard_event = DashboardEvent {
                 event_type: "span_exit".to_string(),
