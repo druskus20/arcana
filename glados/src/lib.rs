@@ -226,12 +226,14 @@ impl Glados {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn start(
         self,
     ) -> (
         tokio::task::JoinHandle<Result<(), GladosInternalError>>,
         GladosHandle,
     ) {
+        debug!("Starting Glados...");
         let (to_glados, from_glados_handle) = tokio::sync::mpsc::channel(self.channel_capacity);
         let glados_task_handle =
             tokio::task::spawn(async move { glados_loop(self, from_glados_handle).await });

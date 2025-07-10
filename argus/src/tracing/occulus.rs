@@ -32,7 +32,7 @@ pub struct DashboardEvent {
     #[serde(rename = "type")]
     pub event_type: String,
     pub timestamp: u64,
-    pub level: String,
+    pub level: Level,
     pub target: String,
     pub message: String,
     pub fields: HashMap<String, String>,
@@ -42,6 +42,38 @@ pub struct DashboardEvent {
     pub line: Option<u32>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Eq, PartialEq, PartialOrd)]
+pub enum Level {
+    TRACE = 0,
+    DEBUG,
+    INFO,
+    WARN,
+    ERROR,
+}
+
+impl From<&tracing::Level> for Level {
+    fn from(level: &tracing::Level) -> Self {
+        match level {
+            &tracing::Level::TRACE => Level::TRACE,
+            &tracing::Level::DEBUG => Level::DEBUG,
+            &tracing::Level::INFO => Level::INFO,
+            &tracing::Level::WARN => Level::WARN,
+            &tracing::Level::ERROR => Level::ERROR,
+        }
+    }
+}
+
+impl ToString for Level {
+    fn to_string(&self) -> String {
+        match self {
+            Level::TRACE => "TRACE".to_string(),
+            Level::DEBUG => "DEBUG".to_string(),
+            Level::INFO => "INFO".to_string(),
+            Level::WARN => "WARN".to_string(),
+            Level::ERROR => "ERROR".to_string(),
+        }
+    }
+}
 impl DashboardTcpLayer {
     pub fn new(remote_addr: String, params: DashboardTcpLayerParams) -> Self {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<DashboardEvent>();
@@ -56,6 +88,7 @@ impl DashboardTcpLayer {
                         connection_attempts = 0;
 
                         while let Some(event) = receiver.recv().await {
+                            dbg!(&event);
                             let event_json = match serde_json::to_string(&event) {
                                 Ok(json) => json,
                                 Err(e) => {
@@ -107,7 +140,7 @@ where
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as u64,
-            level: event.metadata().level().to_string(),
+            level: event.metadata().level().into(),
             target: event.metadata().target().to_string(),
             message: visitor.message,
             fields: visitor.fields,
@@ -132,7 +165,7 @@ where
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as u64,
-                level: "TRACE".to_string(),
+                level: Level::TRACE,
                 target: span_ref.metadata().target().to_string(),
                 message: format!("Entering span: {}", span_ref.metadata().name()),
                 fields: HashMap::new(),
@@ -157,7 +190,7 @@ where
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
                     .as_millis() as u64,
-                level: "TRACE".to_string(),
+                level: Level::TRACE,
                 target: span_ref.metadata().target().to_string(),
                 message: format!("Exiting span: {}", span_ref.metadata().name()),
                 fields: HashMap::new(),
