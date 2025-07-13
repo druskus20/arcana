@@ -42,7 +42,7 @@ pub struct DashboardEvent {
     pub line: Option<u32>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Eq, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Eq, PartialEq, PartialOrd, Hash)]
 pub enum Level {
     TRACE = 0,
     DEBUG,
@@ -88,7 +88,6 @@ impl DashboardTcpLayer {
                         connection_attempts = 0;
 
                         while let Some(event) = receiver.recv().await {
-                            dbg!(&event);
                             let event_json = match serde_json::to_string(&event) {
                                 Ok(json) => json,
                                 Err(e) => {

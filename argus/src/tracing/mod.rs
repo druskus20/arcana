@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use occulus::DashboardTcpLayerParams;
+use oculus::DashboardTcpLayerParams;
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
@@ -11,8 +11,8 @@ use tracing_subscriber::{
 };
 use tracing_tracy::TracyLayer;
 
-#[cfg(feature = "occulus")]
-pub mod occulus;
+#[cfg(feature = "oculus")]
+pub mod oculus;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Output {
@@ -37,7 +37,7 @@ pub struct TracingOptions {
     pub tracy_layer: bool,
 
     // Occulus (custom dashboard)
-    pub occulus_layer: bool,
+    pub oculus_layer: bool,
 
     // Error layer
     pub error_layer: bool,
@@ -57,7 +57,7 @@ impl Default for TracingOptions {
         Self {
             output: Output::Stdout,
             tracy_layer: false,
-            occulus_layer: false,
+            oculus_layer: false,
             error_layer: true,
             log_level: Level::WARN,
             lines: false,
@@ -70,6 +70,13 @@ impl Default for TracingOptions {
 }
 
 pub fn setup_tracing(args: &TracingOptions) -> WorkerGuard {
+    setup_tracing_with_filter(args, None)
+}
+
+pub fn setup_tracing_with_filter(
+    args: &TracingOptions,
+    env_filter_str: Option<String>,
+) -> WorkerGuard {
     let (writer, guard) = match args.output.clone() {
         Output::Stdout => tracing_appender::non_blocking(std::io::stdout()),
         Output::Stderr => tracing_appender::non_blocking(std::io::stderr()),
@@ -90,9 +97,16 @@ pub fn setup_tracing(args: &TracingOptions) -> WorkerGuard {
             FmtSpan::NONE
         };
 
-        let env_filter = EnvFilter::try_from_default_env().unwrap_or(EnvFilter::new(
-            format!("{},smol=warn,async_io=warn,polling=warn,tokio_tungstenite=warn,tungstenite=warn,reqwest=info,hyper_util=info", args.log_level)
-        ));
+        let env_filter = EnvFilter::try_from_default_env().unwrap_or(
+            env_filter_str
+                .map(EnvFilter::new)
+                .unwrap_or(EnvFilter::new(format!(
+                    "{},smol=warn,async_io=warn,polling=warn,\
+                    tokio_tungstenite=warn,tungstenite=warn,\
+                    reqwest=info,hyper_util=info",
+                    args.log_level
+                ))),
+        );
 
         let layer = fmt::Layer::default()
             .with_writer(writer)
@@ -127,35 +141,35 @@ pub fn setup_tracing(args: &TracingOptions) -> WorkerGuard {
         None
     };
 
-    let occulus = {
-        #[cfg(feature = "occulus")]
-        if args.occulus_layer {
-            Some(occulus::DashboardTcpLayer::new(
+    let oculus = {
+        #[cfg(feature = "oculus")]
+        if args.oculus_layer {
+            Some(oculus::DashboardTcpLayer::new(
                 "127.0.0.1:8080".to_string(),
                 DashboardTcpLayerParams::default(),
             ))
         } else {
             None
         }
-        #[cfg(not(feature = "occulus"))]
-        if args.occulus_layer {
-            panic!("occulus feature is not enabled, but oculus_layer is set to true");
+        #[cfg(not(feature = "oculus"))]
+        if args.oculus_layer {
+            panic!("oculus feature is not enabled, but oculus_layer is set to true");
         } else {
             Option::<()>::None
         }
     };
 
-    #[cfg(feature = "occulus")]
+    #[cfg(feature = "oculus")]
     Registry::default()
         // tracy needs to go first - otherwise it somehow inherits with_ansi(true) and that shows weird
         // in the Tracy profiler
         .with(tracy)
         .with(base_layer)
         .with(error)
-        .with(occulus)
+        .with(oculus)
         .init();
 
-    #[cfg(not(feature = "occulus"))]
+    #[cfg(not(feature = "oculus"))]
     Registry::default()
         // tracy needs to go first - otherwise it somehow inherits with_ansi(true) and that shows weird
         // in the Tracy profiler

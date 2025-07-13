@@ -1,7 +1,7 @@
 use tracing::{Level, debug, error, info, span, warn};
 use tracing_subscriber::{Registry, layer::SubscriberExt};
 
-use argus::tracing::occulus::DashboardTcpLayer;
+use argus::tracing::oculus::DashboardTcpLayer;
 use tracing_subscriber::util::SubscriberInitExt;
 // Test functions to generate different types of events
 async fn simulate_user_login(user_id: u64, session: &str) {
