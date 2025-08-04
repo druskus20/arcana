@@ -1,7 +1,7 @@
-use bytes::{BufMut, BytesMut};
-use std::io::{self, Read, Write};
+use bytes::BytesMut;
 
 pub trait Stage {
+    /// Returns the length of the data processed.
     fn process(&mut self, data: &mut BytesMut) -> usize;
 }
 
@@ -14,8 +14,9 @@ impl Pipeline {
         Self { stages: Vec::new() }
     }
 
-    pub fn add_stage<S: Stage + 'static>(&mut self, stage: S) {
+    pub fn add_stage<S: Stage + 'static>(mut self, stage: S) -> Self {
         self.stages.push(Box::new(stage));
+        self
     }
 
     pub fn run_on_buf(&mut self, data: &mut BytesMut) {
@@ -64,9 +65,7 @@ mod tests {
 
     #[test]
     fn test_pipeline() {
-        let mut pipeline = Pipeline::new();
-        pipeline.add_stage(Uppercase);
-        pipeline.add_stage(Reverse);
+        let mut pipeline = Pipeline::new().add_stage(Uppercase).add_stage(Reverse);
 
         let mut buf = BytesMut::new();
         buf.write_str("hello world").unwrap();

@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
+#[cfg(feature = "oculus")]
 use oculus::DashboardTcpLayerParams;
+
 use tracing::Level;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
@@ -103,7 +105,10 @@ pub fn setup_tracing_with_filter(
                 .unwrap_or(EnvFilter::new(format!(
                     "{},smol=warn,async_io=warn,polling=warn,\
                     tokio_tungstenite=warn,tungstenite=warn,\
-                    reqwest=info,hyper_util=info",
+                    reqwest=info,hyper_util=info,calloop=warn,\
+                    eframe=warn,egui_glow=warn,sctk=warn,\
+                    winit=warn,egui_tiles=warn,egui=warn,\
+                    zbus=warn,arboard=warn",
                     args.log_level
                 ))),
         );

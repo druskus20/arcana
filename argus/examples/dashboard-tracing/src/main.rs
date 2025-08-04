@@ -1,7 +1,7 @@
 use tracing::{Level, debug, error, info, span, warn};
 use tracing_subscriber::{Registry, layer::SubscriberExt};
 
-use argus::tracing::oculus::DashboardTcpLayer;
+use argus::tracing::oculus::{DashboardTcpLayer, DashboardTcpLayerParams};
 use tracing_subscriber::util::SubscriberInitExt;
 // Test functions to generate different types of events
 async fn simulate_user_login(user_id: u64, session: &str) {
@@ -89,7 +89,10 @@ async fn simulate_api_request(endpoint: &str, method: &str, status_code: u16) {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Initialize tracing with dashboard layer
-    let dashboard_layer = DashboardTcpLayer::new("127.0.0.1:8080".to_string()).await?;
+    let dashboard_layer = DashboardTcpLayer::new(
+        "127.0.0.1:8080".to_string(),
+        DashboardTcpLayerParams::default(),
+    );
 
     Registry::default()
         .with(dashboard_layer)
