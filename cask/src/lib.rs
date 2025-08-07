@@ -10,11 +10,16 @@ use parking_lot::Mutex;
 use tokio::sync::{Semaphore, SemaphorePermit};
 
 #[repr(C)]
-#[derive(bytemuck::Pod, bytemuck::Zeroable, Debug, Clone, Copy)]
-pub struct BufHeader {
-    pub capacity: usize, // Maximum capacity of the buffer in bytes
-    pub len: usize,      // Current length of the buffer in bytes
+#[derive(bytemuck::Zeroable, Debug, Clone, Copy)]
+pub struct BufHeader<T: Pod> {
+    pub capacity: usize,   // Maximum capacity of the buffer in bytes
+    pub capacity_t: usize, // Maximum capacity of the buffer in elements of type T
+    pub len: usize,        // Current length of the buffer in bytes
+    pub len_t: usize,      // Current length of the buffer in elements of type T
+    pub _phantom: std::marker::PhantomData<T>,
 }
+
+unsafe impl<T: Pod> Pod for BufHeader<T> {}
 
 #[repr(transparent)]
 #[derive(Debug, Clone)]
@@ -24,16 +29,19 @@ pub struct Buffer<T> {
 }
 
 impl<T: Pod> Buffer<T> {
-    const HEADER_SIZE: usize = std::mem::size_of::<BufHeader>();
+    const HEADER_SIZE: usize = std::mem::size_of::<BufHeader<T>>();
 
-    pub fn with_capacity(capacity: usize) -> Self {
-        let data_size = capacity * std::mem::size_of::<T>();
+    pub fn with_capacity(capacity_t: usize) -> Self {
+        let data_size = capacity_t * std::mem::size_of::<T>();
 
         let mut buffer = BytesMut::with_capacity(Self::HEADER_SIZE + data_size);
         // buffer.resize(Self::HEADER_SIZE + data_size, 0); // <-- unsure if this is how it should
-        let header = BufHeader {
+        let header = BufHeader::<T> {
             capacity: data_size,
+            capacity_t,
             len: 0,
+            len_t: 0,
+            _phantom: std::marker::PhantomData,
         };
         // put the header
         buffer.put(bytemuck::bytes_of(&header));
@@ -47,11 +55,11 @@ impl<T: Pod> Buffer<T> {
         }
     }
 
-    pub fn header(&self) -> &BufHeader {
+    pub fn header(&self) -> &BufHeader<T> {
         bytemuck::checked::from_bytes(&self.inner[..Self::HEADER_SIZE])
     }
 
-    pub fn header_mut(&mut self) -> &mut BufHeader {
+    pub fn header_mut(&mut self) -> &mut BufHeader<T> {
         bytemuck::checked::from_bytes_mut(&mut self.inner[..Self::HEADER_SIZE])
     }
 
@@ -72,24 +80,24 @@ impl<T: Pod> Buffer<T> {
         &mut data[..header.len]
     }
 
-    pub fn split(&self) -> (&BufHeader, &[T]) {
+    pub fn split(&self) -> (&BufHeader<T>, &[T]) {
         let header = self.header();
         let data = self.data();
         (header, data)
     }
 
     // splits and returns the header and the raw data slice
-    pub fn raw_split_mut(&mut self) -> (&mut BufHeader, &mut [T]) {
+    pub fn raw_split_mut(&mut self) -> (&mut BufHeader<T>, &mut [T]) {
         let (header_bytes, data_bytes) = self.inner.split_at_mut(Self::HEADER_SIZE);
 
-        let header = bytemuck::checked::from_bytes_mut::<BufHeader>(header_bytes);
+        let header = bytemuck::checked::from_bytes_mut::<BufHeader<T>>(header_bytes);
         let data = bytemuck::checked::cast_slice_mut::<u8, T>(data_bytes);
 
         (header, data)
     }
 
     /// splits and returns the slice of data that is initialized (up to the current length)
-    pub fn split_mut(&mut self) -> (&mut BufHeader, &mut [T]) {
+    pub fn split_mut(&mut self) -> (&mut BufHeader<T>, &mut [T]) {
         let (header, data) = self.raw_split_mut();
         let data_up_to_len = &mut data[..header.len];
         (header, data_up_to_len)
@@ -141,6 +149,50 @@ impl<T: Pod> Buffer<T> {
         header.len = src.len();
         data[..src.len()].copy_from_slice(src);
         data[src.len()..].fill(T::zeroed());
+    }
+
+    /// If the iterator yields fewer than `n` items, it copies as many as possible.
+    /// The rest of the buffer space (up to `n`) is filled with zeroed values.
+    /// Returns the number of items copied.
+    /// Does not do any unnecessary allocations.
+    pub fn copy_at_most_n<I: IntoIterator<Item = T>>(&mut self, src: I, n: usize) -> usize {
+        assert!(
+            std::mem::size_of::<T>() > 0,
+            "T must be a non-zero size type"
+        );
+        assert!(
+            self.capacity() % std::mem::size_of::<T>() == 0,
+            "Buffer capacity must be a multiple of the size of T"
+        );
+        assert!(
+            self.capacity() >= std::mem::size_of::<BufHeader<T>>(),
+            "Buffer must have enough capacity to hold the header"
+        );
+
+        let (header, data) = self.raw_split_mut();
+
+        let max_len = data.len().min(n);
+
+        let mut iter = src.into_iter();
+        let mut count = 0;
+
+        for slot in data.iter_mut().take(max_len) {
+            match iter.next() {
+                Some(item) => {
+                    *slot = item;
+                    count += 1;
+                }
+                None => break,
+            }
+        }
+
+        // Zero out the rest up to `n`
+        for slot in data.iter_mut().skip(count).take(n - count) {
+            *slot = T::zeroed();
+        }
+
+        header.len = count;
+        count
     }
 
     pub fn clear(&mut self) {
@@ -589,7 +641,7 @@ mod tests {
     #[test]
     fn test_buffer_memory_layout() {
         let buffer = Buffer::<Sample>::with_capacity(3);
-        let header_size = std::mem::size_of::<BufHeader>();
+        let header_size = std::mem::size_of::<BufHeader<Sample>>();
         let data_size = 3 * std::mem::size_of::<Sample>();
 
         // Verify the internal buffer has the expected size
@@ -637,5 +689,108 @@ mod tests {
         assert_eq!(buffer.capacity(), 5 * std::mem::size_of::<Sample>());
         assert_eq!(buffer.len(), 0);
         assert!(buffer.is_empty());
+    }
+    #[test]
+    fn test_capacity_t_and_len_t_on_creation() {
+        let buffer = Buffer::<Sample>::with_capacity(5);
+        let header = buffer.header();
+
+        assert_eq!(header.capacity_t, 5);
+        assert_eq!(header.capacity, 5 * std::mem::size_of::<Sample>());
+        assert_eq!(header.len_t, 0);
+        assert_eq!(header.len, 0);
+    }
+
+    #[test]
+    fn test_len_t_increases_on_push() {
+        let mut buffer = Buffer::<Sample>::with_capacity(3);
+        buffer.push(Sample(1));
+        buffer.push(Sample(2));
+
+        let header = buffer.header();
+        assert_eq!(header.len_t, 2);
+        assert_eq!(header.len, 2); // bytes == elements since T: Sized and aligned
+    }
+
+    #[test]
+    fn test_len_t_decreases_on_pop() {
+        let mut buffer = Buffer::<Sample>::with_capacity(3);
+        buffer.push(Sample(1));
+        buffer.push(Sample(2));
+        buffer.pop();
+
+        let header = buffer.header();
+        assert_eq!(header.len_t, 1);
+        assert_eq!(header.len, 1);
+    }
+
+    #[test]
+    fn test_len_t_and_capacity_t_on_resize() {
+        let mut buffer = Buffer::<Sample>::with_capacity(5);
+        buffer.push(Sample(10));
+        buffer.push(Sample(20));
+        buffer.push(Sample(30));
+
+        buffer.resize(2);
+        let header = buffer.header();
+        assert_eq!(header.len_t, 2);
+        assert_eq!(header.len, 2);
+
+        buffer.resize(5);
+        let header = buffer.header();
+        assert_eq!(header.len_t, 5);
+        assert_eq!(header.len, 5);
+    }
+
+    #[test]
+    fn test_len_t_on_clear() {
+        let mut buffer = Buffer::<Sample>::with_capacity(3);
+        buffer.push(Sample(1));
+        buffer.push(Sample(2));
+        buffer.clear();
+
+        let header = buffer.header();
+        assert_eq!(header.len_t, 0);
+        assert_eq!(header.len, 0);
+    }
+
+    #[test]
+    fn test_copy_from_slice_sets_len_t() {
+        let mut buffer = Buffer::<Sample>::with_capacity(4);
+        let slice = [Sample(1), Sample(2), Sample(3)];
+
+        buffer.copy_from_slice(&slice);
+
+        let header = buffer.header();
+        assert_eq!(header.len_t, 3);
+        assert_eq!(header.len, 3);
+    }
+
+    #[test]
+    fn test_copy_at_most_n_sets_len_t() {
+        let mut buffer = Buffer::<Sample>::with_capacity(5);
+        let vec = vec![Sample(5), Sample(6)];
+
+        let copied = buffer.copy_at_most_n(vec.clone(), 4);
+
+        let header = buffer.header();
+        assert_eq!(copied, 2);
+        assert_eq!(header.len_t, 2);
+        assert_eq!(header.len, 2);
+    }
+
+    #[tokio::test]
+    async fn test_len_t_reset_on_buffer_return() {
+        let pool = BufferPool::<Sample>::with_capacity(1, 3);
+
+        let mut buffer_with_permit = pool.get_buffer().await;
+        buffer_with_permit.buffer_mut().push(Sample(1));
+        assert_eq!(buffer_with_permit.buffer().header().len_t, 1);
+
+        pool.return_buffer(buffer_with_permit);
+
+        let buffer_with_permit = pool.get_buffer().await;
+        assert_eq!(buffer_with_permit.buffer().header().len_t, 0);
+        assert_eq!(buffer_with_permit.buffer().header().len, 0);
     }
 }

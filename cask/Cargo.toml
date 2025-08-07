@@ -12,3 +12,9 @@ parking_lot = { version = "0.12" }
 
 [dev-dependencies]
 tokio = { version = "1.47", features = ["time", "macros", "rt-multi-thread"] }
+criterion = "0.7"
+
+
+[[bench]]
+name = "buffer"
+harness = false
