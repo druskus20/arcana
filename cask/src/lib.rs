@@ -19,6 +19,18 @@ pub struct BufHeader<T: Pod> {
     pub _phantom: std::marker::PhantomData<T>,
 }
 
+impl<T: Pod> BufHeader<T> {
+    pub fn update_length(&mut self, len_t: usize) {
+        self.len_t = len_t;
+        self.len_bytes = len_t * std::mem::size_of::<T>();
+    }
+
+    pub fn update_capacity(&mut self, capacity_t: usize) {
+        self.capacity_t = capacity_t;
+        self.capacity_bytes = capacity_t * std::mem::size_of::<T>();
+    }
+}
+
 unsafe impl<T: Pod> Pod for BufHeader<T> {}
 
 #[repr(transparent)]
@@ -30,11 +42,6 @@ pub struct Buffer<T> {
 
 impl<T: Pod> Buffer<T> {
     const HEADER_SIZE: usize = std::mem::size_of::<BufHeader<T>>();
-
-    fn update_lengths(header: &mut BufHeader<T>, len_t: usize) {
-        header.len_t = len_t;
-        header.len_bytes = len_t * std::mem::size_of::<T>();
-    }
 
     fn max_elements(header: &BufHeader<T>) -> usize {
         header.capacity_t
@@ -110,7 +117,7 @@ impl<T: Pod> Buffer<T> {
         let max = Self::max_elements(header);
         if header.len_t < max {
             data[header.len_t] = item;
-            Self::update_lengths(header, header.len_t + 1);
+            header.update_length(header.len_t + 1);
         } else {
             panic!("Buffer is full, cannot push more items");
         }
@@ -120,7 +127,7 @@ impl<T: Pod> Buffer<T> {
         let (header, data) = self.raw_split_mut();
         if header.len_t > 0 {
             let new_len_t = header.len_t - 1;
-            Self::update_lengths(header, new_len_t);
+            header.update_length(new_len_t);
             Some(data[new_len_t])
         } else {
             None
@@ -141,7 +148,7 @@ impl<T: Pod> Buffer<T> {
         if new_size > header.capacity_t {
             panic!("Cannot resize buffer to a larger size than its capacity");
         }
-        Self::update_lengths(header, new_size);
+        header.update_length(new_size);
         data.fill(T::zeroed());
     }
 
@@ -152,7 +159,7 @@ impl<T: Pod> Buffer<T> {
         }
         data[..src.len()].copy_from_slice(src);
         data[src.len()..].fill(T::zeroed());
-        Self::update_lengths(header, src.len());
+        header.update_length(src.len());
     }
 
     pub fn copy_at_most_n<I: IntoIterator<Item = T>>(&mut self, src: I, n: usize) -> usize {
@@ -175,14 +182,14 @@ impl<T: Pod> Buffer<T> {
             *slot = T::zeroed();
         }
 
-        Self::update_lengths(header, count);
+        header.update_length(count);
         count
     }
 
     pub fn clear(&mut self) {
         let (header, data) = self.raw_split_mut();
         data.fill(T::zeroed());
-        Self::update_lengths(header, 0);
+        header.update_length(0);
     }
 
     pub fn len_bytes(&self) -> usize {
