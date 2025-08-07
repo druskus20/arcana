@@ -12,9 +12,9 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 #[repr(C)]
 #[derive(bytemuck::Zeroable, Debug, Clone, Copy)]
 pub struct BufHeader<T: Pod> {
-    pub capacity: usize,
+    pub capacity_bytes: usize,
     pub capacity_t: usize,
-    pub len: usize,
+    pub len_bytes: usize,
     pub len_t: usize,
     pub _phantom: std::marker::PhantomData<T>,
 }
@@ -33,7 +33,7 @@ impl<T: Pod> Buffer<T> {
 
     fn update_lengths(header: &mut BufHeader<T>, len_t: usize) {
         header.len_t = len_t;
-        header.len = len_t * std::mem::size_of::<T>();
+        header.len_bytes = len_t * std::mem::size_of::<T>();
     }
 
     fn max_elements(header: &BufHeader<T>) -> usize {
@@ -45,9 +45,9 @@ impl<T: Pod> Buffer<T> {
         let mut buffer = BytesMut::with_capacity(Self::HEADER_SIZE + data_size);
 
         let header = BufHeader::<T> {
-            capacity: data_size,
+            capacity_bytes: data_size,
             capacity_t,
-            len: 0,
+            len_bytes: 0,
             len_t: 0,
             _phantom: std::marker::PhantomData,
         };
@@ -185,19 +185,19 @@ impl<T: Pod> Buffer<T> {
         Self::update_lengths(header, 0);
     }
 
+    pub fn len_bytes(&self) -> usize {
+        self.header().len_bytes
+    }
+
+    pub fn capacity_bytes(&self) -> usize {
+        self.header().capacity_bytes
+    }
+
     pub fn len(&self) -> usize {
-        self.header().len
-    }
-
-    pub fn capacity(&self) -> usize {
-        self.header().capacity
-    }
-
-    pub fn len_t(&self) -> usize {
         self.header().len_t
     }
 
-    pub fn capacity_t(&self) -> usize {
+    pub fn capacity(&self) -> usize {
         self.header().capacity_t
     }
 }
@@ -325,22 +325,22 @@ mod tests {
     #[test]
     fn test_buffer_creation_and_access() {
         let mut buffer = Buffer::<Sample>::with_capacity(4);
-        assert_eq!(buffer.capacity(), 4 * std::mem::size_of::<Sample>());
-        assert_eq!(buffer.len(), 0);
+        assert_eq!(buffer.capacity_bytes(), 4 * std::mem::size_of::<Sample>());
+        assert_eq!(buffer.len_bytes(), 0);
         assert!(buffer.is_empty());
         assert!(!buffer.is_full());
 
         let (header, data) = buffer.raw_split_mut();
-        assert_eq!(header.len, 0);
-        assert_eq!(header.capacity, 4 * std::mem::size_of::<Sample>());
+        assert_eq!(header.len_bytes, 0);
+        assert_eq!(header.capacity_bytes, 4 * std::mem::size_of::<Sample>());
         assert_eq!(data.len(), 4);
         let (header, data) = buffer.split_mut();
-        assert_eq!(header.len, 0);
-        assert_eq!(header.capacity, 4 * std::mem::size_of::<Sample>());
+        assert_eq!(header.len_bytes, 0);
+        assert_eq!(header.capacity_bytes, 4 * std::mem::size_of::<Sample>());
         assert_eq!(data.len(), 0); // Only the initialized part of the buffer (0)
 
         // Manually set data to test split functionality
-        header.len = 2 * std::mem::size_of::<Sample>();
+        header.len_bytes = 2 * std::mem::size_of::<Sample>();
         header.len_t = 2;
 
         let (_, data) = buffer.split_mut();
@@ -363,7 +363,7 @@ mod tests {
         buffer.push(Sample(20));
         buffer.push(Sample(30));
 
-        assert_eq!(buffer.len_t(), 3);
+        assert_eq!(buffer.len(), 3);
         assert!(buffer.is_full());
         assert!(!buffer.is_empty());
 
@@ -375,10 +375,10 @@ mod tests {
         // Test pop
         assert_eq!(buffer.pop(), Some(Sample(30)));
         assert_eq!(buffer.pop(), Some(Sample(20)));
-        assert_eq!(buffer.len_t(), 1);
+        assert_eq!(buffer.len(), 1);
 
         assert_eq!(buffer.pop(), Some(Sample(10)));
-        assert_eq!(buffer.len_t(), 0);
+        assert_eq!(buffer.len(), 0);
         assert!(buffer.is_empty());
 
         assert_eq!(buffer.pop(), None);
@@ -400,10 +400,10 @@ mod tests {
         buffer.push(Sample(3));
 
         buffer.resize(2);
-        assert_eq!(buffer.len_t(), 2);
+        assert_eq!(buffer.len(), 2);
 
         buffer.resize(4);
-        assert_eq!(buffer.len_t(), 4);
+        assert_eq!(buffer.len(), 4);
         // After resize, new elements should be zeroed
         let data = buffer.data();
         assert_eq!(data[0], Sample(0)); // Should be zeroed due to resize
@@ -423,7 +423,7 @@ mod tests {
         let source = [Sample(10), Sample(20), Sample(30)];
 
         buffer.copy_from_slice(&source);
-        assert_eq!(buffer.len_t(), 3);
+        assert_eq!(buffer.len(), 3);
 
         let data = buffer.data();
         assert_eq!(data[0], Sample(10));
@@ -445,10 +445,10 @@ mod tests {
         buffer.push(Sample(10));
         buffer.push(Sample(20));
 
-        assert_eq!(buffer.len_t(), 2);
+        assert_eq!(buffer.len(), 2);
         buffer.clear();
-        assert_eq!(buffer.len_t(), 0);
         assert_eq!(buffer.len(), 0);
+        assert_eq!(buffer.len_bytes(), 0);
         assert!(buffer.is_empty());
     }
 
@@ -467,7 +467,7 @@ mod tests {
         buffer.push(sample1);
         buffer.push(sample2);
 
-        assert_eq!(buffer.len_t(), 2);
+        assert_eq!(buffer.len(), 2);
         let data = buffer.data();
         assert_eq!(data[0], sample1);
         assert_eq!(data[1], sample2);
@@ -496,7 +496,7 @@ mod tests {
         // Use the buffer
         let buffer = buf_with_permit.buffer_mut();
         buffer.push(Sample(123));
-        assert_eq!(buffer.len_t(), 1);
+        assert_eq!(buffer.len(), 1);
         assert_eq!(buffer.data()[0], Sample(123));
 
         // Pool should have no available buffers now
@@ -573,7 +573,7 @@ mod tests {
         let buffer = buf_with_permit.buffer_mut();
         buffer.push(Sample(100));
         buffer.push(Sample(200));
-        assert_eq!(buffer.len_t(), 2);
+        assert_eq!(buffer.len(), 2);
 
         // Return buffer
         pool.return_buffer(buf_with_permit);
@@ -581,7 +581,7 @@ mod tests {
         // Get buffer again - should be cleared
         let buf_with_permit = pool.get_buffer().await;
         let buffer = buf_with_permit.buffer();
-        assert_eq!(buffer.len(), 0);
+        assert_eq!(buffer.len_bytes(), 0);
         assert!(buffer.is_empty());
     }
 
@@ -639,8 +639,8 @@ mod tests {
 
         // Verify header is at the beginning
         let header = buffer.header();
-        assert_eq!(header.capacity, data_size);
-        assert_eq!(header.len, 0);
+        assert_eq!(header.capacity_bytes, data_size);
+        assert_eq!(header.len_bytes, 0);
     }
 
     #[test]
@@ -653,7 +653,7 @@ mod tests {
             buffer.push(Sample(i as u32));
         }
 
-        assert_eq!(buffer.len_t(), large_size / 2);
+        assert_eq!(buffer.len(), large_size / 2);
         assert!(!buffer.is_full());
 
         // Verify data
@@ -676,8 +676,8 @@ mod tests {
         // Get buffer again - should have same capacity but be empty
         let buf2 = pool.get_buffer().await;
         let buffer = buf2.buffer();
-        assert_eq!(buffer.capacity(), 5 * std::mem::size_of::<Sample>());
-        assert_eq!(buffer.len(), 0);
+        assert_eq!(buffer.capacity_bytes(), 5 * std::mem::size_of::<Sample>());
+        assert_eq!(buffer.len_bytes(), 0);
         assert!(buffer.is_empty());
     }
     #[test]
@@ -686,9 +686,9 @@ mod tests {
         let header = buffer.header();
 
         assert_eq!(header.capacity_t, 5);
-        assert_eq!(header.capacity, 5 * std::mem::size_of::<Sample>());
+        assert_eq!(header.capacity_bytes, 5 * std::mem::size_of::<Sample>());
         assert_eq!(header.len_t, 0);
-        assert_eq!(header.len, 0);
+        assert_eq!(header.len_bytes, 0);
     }
 
     #[test]
@@ -699,7 +699,7 @@ mod tests {
 
         let header = buffer.header();
         assert_eq!(header.len_t, 2);
-        assert_eq!(header.len, 2 * std::mem::size_of::<Sample>());
+        assert_eq!(header.len_bytes, 2 * std::mem::size_of::<Sample>());
     }
 
     #[test]
@@ -711,7 +711,7 @@ mod tests {
 
         let header = buffer.header();
         assert_eq!(header.len_t, 1);
-        assert_eq!(header.len, std::mem::size_of::<Sample>());
+        assert_eq!(header.len_bytes, std::mem::size_of::<Sample>());
     }
 
     #[test]
@@ -724,12 +724,12 @@ mod tests {
         buffer.resize(2);
         let header = buffer.header();
         assert_eq!(header.len_t, 2);
-        assert_eq!(header.len, 2 * std::mem::size_of::<Sample>());
+        assert_eq!(header.len_bytes, 2 * std::mem::size_of::<Sample>());
 
         buffer.resize(5);
         let header = buffer.header();
         assert_eq!(header.len_t, 5);
-        assert_eq!(header.len, 5 * std::mem::size_of::<Sample>());
+        assert_eq!(header.len_bytes, 5 * std::mem::size_of::<Sample>());
     }
 
     #[test]
@@ -741,7 +741,7 @@ mod tests {
 
         let header = buffer.header();
         assert_eq!(header.len_t, 0);
-        assert_eq!(header.len, 0);
+        assert_eq!(header.len_bytes, 0);
     }
 
     #[test]
@@ -753,7 +753,7 @@ mod tests {
 
         let header = buffer.header();
         assert_eq!(header.len_t, 3);
-        assert_eq!(header.len, 3 * std::mem::size_of::<Sample>());
+        assert_eq!(header.len_bytes, 3 * std::mem::size_of::<Sample>());
     }
 
     #[test]
@@ -766,7 +766,7 @@ mod tests {
         let header = buffer.header();
         assert_eq!(copied, 2);
         assert_eq!(header.len_t, 2);
-        assert_eq!(header.len, 2 * std::mem::size_of::<Sample>())
+        assert_eq!(header.len_bytes, 2 * std::mem::size_of::<Sample>())
     }
 
     #[tokio::test]
@@ -781,6 +781,6 @@ mod tests {
 
         let buffer_with_permit = pool.get_buffer().await;
         assert_eq!(buffer_with_permit.buffer().header().len_t, 0);
-        assert_eq!(buffer_with_permit.buffer().header().len, 0);
+        assert_eq!(buffer_with_permit.buffer().header().len_bytes, 0);
     }
 }
