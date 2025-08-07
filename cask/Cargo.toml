@@ -18,3 +18,7 @@ criterion = "0.7"
 [[bench]]
 name = "buffer"
 harness = false
+
+[[bench]]
+name = "claude"
+harness = false
