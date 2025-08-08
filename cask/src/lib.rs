@@ -11,7 +11,7 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 
 #[repr(C)]
 #[derive(bytemuck::Zeroable, Debug, Clone, Copy)]
-pub struct BufHeader<T: Pod> {
+pub struct BufHeader<T> {
     pub capacity_bytes: usize,
     pub capacity_t: usize,
     pub len_bytes: usize,
