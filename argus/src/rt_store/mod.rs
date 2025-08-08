@@ -1,28 +1,30 @@
+//! This module implements a store meant to act as an intermetiate layer between
+//! the realtime thread and a monitoring thread.
+//!
+//! The realtime thread can push metrics avoiding allocations and system calls, to a RtStore.
+//! The monitoring thread can get a StoreSnapshot from the RtStoreReader, which is a snapshot
+//! of the store at the time of reading.
+//!
+//! The RTStore is implemented using a triple buffer to allow for concurrent access. We don't care
+//! about losing metrics if the monitoring thread is not fast enough to read the store. This is not
+//! a database.
+//!
+//! The RTStore gets allocated only, on creation, at the beginning of the program, and it's metrics
+//! are reset every time the monitoring thread reads it.
+//!
+//!  ## On the Realtime Safety of std::time::Instant
+//!
+//!  This crate is only realtime-safe in unix systems with vDSO support, as it uses
+//!  `std::time::Instant` with CLOCK_MONOTONIC which takes advantage of the vDSO clock_gettime syscall.
+//!
+//!    VDSO will still generate an actual system call for timers other than CLOCK_REALTIME, CLOCK_MONOTONIC,
+//!    CLOCK_REALTIME_COARSE and CLOCK_MONOTONIC_COARSE (as of Linux 3.13 up to 4.11-rc3).
+//!
+//!    `Instant` in Rust uses libc::CLOCK_MONOTONIC
+//!    See: https://doc.rust-lang.org/nightly/src/std/sys/pal/unix/time.rs.html
+//!
+
 use metrics::RtMetric;
-/// This module implements a store meant to act as an intermetiate layer between
-/// the realtime thread and a monitoring thread.
-///
-/// The realtime thread can push metrics avoiding allocations and system calls, to a RtStore.
-/// The monitoring thread can get a StoreSnapshot from the RtStoreReader, which is a snapshot
-/// of the store at the time of reading.
-///
-/// The RTStore is implemented using a triple buffer to allow for concurrent access. We don't care
-/// about losing metrics if the monitoring thread is not fast enough to read the store. This is not
-/// a database.
-///
-/// The RTStore gets allocated only, on creation, at the beginning of the program, and it's metrics
-/// are reset every time the monitoring thread reads it.
-///
-///  ## On the Realtime Safety of std::time::Instant
-///
-///  This crate is only realtime-safe in unix systems with vDSO support, as it uses
-///  `std::time::Instant` with CLOCK_MONOTONIC which takes advantage of the vDSO clock_gettime syscall.
-///
-//    VDSO will still generate an actual system call for timers other than CLOCK_REALTIME, CLOCK_MONOTONIC,
-//    CLOCK_REALTIME_COARSE and CLOCK_MONOTONIC_COARSE (as of Linux 3.13 up to 4.11-rc3).
-//
-//    `Instant` in Rust uses libc::CLOCK_MONOTONIC
-//    See: https://doc.rust-lang.org/nightly/src/std/sys/pal/unix/time.rs.html
 use std::{any::type_name, collections::HashMap};
 use triple_buffer::Output;
 use vdso::Vdso;
