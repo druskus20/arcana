@@ -3,13 +3,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::UnboundedSender;
-use tracing::{Event, Instrument, Metadata, Span, Subscriber, span};
+use tracing::{Event, Subscriber, span};
 use tracing_subscriber::layer::Context;
-use tracing_tracy::TracyLayer;
 
 // Dashboard TCP Layer - Tracy-style real-time logging
 pub struct DashboardTcpLayer {

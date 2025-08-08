@@ -25,7 +25,6 @@
 //!
 
 use metrics::RtMetric;
-use std::{any::type_name, collections::HashMap};
 use triple_buffer::Output;
 use vdso::Vdso;
 
