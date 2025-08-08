@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::Display,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -15,14 +16,9 @@ pub struct DashboardTcpLayer {
     params: DashboardTcpLayerParams,
 }
 
+#[derive(Default)]
 pub struct DashboardTcpLayerParams {
     pub span_events: bool,
-}
-
-impl Default for DashboardTcpLayerParams {
-    fn default() -> Self {
-        Self { span_events: false }
-    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -69,15 +65,16 @@ impl From<&tracing::Level> for Level {
     }
 }
 
-impl ToString for Level {
-    fn to_string(&self) -> String {
-        match self {
-            Level::TRACE => "TRACE".to_string(),
-            Level::DEBUG => "DEBUG".to_string(),
-            Level::INFO => "INFO".to_string(),
-            Level::WARN => "WARN".to_string(),
-            Level::ERROR => "ERROR".to_string(),
-        }
+impl Display for Level {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let level_str = match self {
+            Level::TRACE => "TRACE",
+            Level::DEBUG => "DEBUG",
+            Level::INFO => "INFO",
+            Level::WARN => "WARN",
+            Level::ERROR => "ERROR",
+        };
+        write!(f, "{level_str}")
     }
 }
 
@@ -260,10 +257,10 @@ impl DashboardFieldVisitor {
 impl tracing::field::Visit for DashboardFieldVisitor {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "message" {
-            self.message = format!("{:?}", value).trim_matches('"').to_string();
+            self.message = format!("{value:?}").trim_matches('"').to_string();
         } else {
             self.fields
-                .insert(field.name().to_string(), format!("{:?}", value));
+                .insert(field.name().to_string(), format!("{value:?}"));
         }
     }
 }

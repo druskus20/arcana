@@ -22,14 +22,14 @@ impl Default for TimeSeries {
 }
 
 impl TimeSeries {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             values: [0.0; MAX_TS_VALUES],
             n_values: 0,
         }
     }
 
-    fn push(&mut self, value: f32) -> Result<(), StoreError> {
+    pub fn push(&mut self, value: f32) -> Result<(), StoreError> {
         if self.n_values >= MAX_TS_VALUES {
             return Err(StoreError::FullTimeSeries);
         }
@@ -38,11 +38,15 @@ impl TimeSeries {
         Ok(())
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.n_values
     }
 
-    fn values(&self) -> &[f32] {
+    pub fn is_empty(&self) -> bool {
+        self.n_values == 0
+    }
+
+    pub fn values(&self) -> &[f32] {
         &self.values
     }
 }
@@ -94,6 +98,7 @@ impl Instant {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Copy)]
 pub enum RtMetric {
     Message(Message),

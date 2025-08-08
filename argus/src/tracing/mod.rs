@@ -135,6 +135,9 @@ pub fn setup_tracing_with_filter(
     let tracy = if args.tracy_layer {
         #[cfg(not(feature = "tracy-profiler"))]
         panic!("tracy-profiler feature is not enabled, but tracy_layer is set to true");
+
+        // this is a horrible hack so that the branches of the If share the same type
+        #[allow(unreachable_code)]
         Some(TracyLayer::default())
     } else {
         None
@@ -146,8 +149,8 @@ pub fn setup_tracing_with_filter(
         None
     };
 
+    #[cfg(feature = "oculus")]
     let oculus = {
-        #[cfg(feature = "oculus")]
         if args.oculus_layer {
             Some(oculus::DashboardTcpLayer::new(
                 "127.0.0.1:8080".to_string(),
